@@ -1,0 +1,147 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to {{companyName}}</title>
+</head>
+
+<body style="margin:0; padding:0; background-color:#f4f6f9; font-family:Arial, Helvetica, sans-serif; color:#202124;">
+
+  <table width="100%" cellpadding="0" cellspacing="0" border="0"
+    style="background-color:#f4f6f9; padding:40px 15px;">
+
+    <tr>
+      <td align="center">
+
+        <table width="600" cellpadding="0" cellspacing="0" border="0"
+          style="max-width:600px; width:100%; background-color:#ffffff; border-radius:12px; overflow:hidden;">
+
+          <!-- Header -->
+          <tr>
+            <td align="center"
+              style="background-color:#111827; padding:35px 25px;">
+
+              <h1 style="margin:0; color:#ffffff; font-size:27px; font-weight:700;">
+                {{companyName}}
+              </h1>
+
+              <p style="margin:10px 0 0; color:#cbd5e1; font-size:13px; letter-spacing:1px;">
+                WELCOME TO THE COMMUNITY
+              </p>
+
+            </td>
+          </tr>
+
+          <!-- Main Content -->
+          <tr>
+            <td style="padding:40px 35px 20px;">
+
+              <h2 style="margin:0 0 18px; font-size:25px; color:#111827;">
+                Welcome, {{name}}!
+              </h2>
+
+              <p style="margin:0 0 18px; font-size:15px; line-height:1.8; color:#4b5563;">
+                We're excited to have you on board. Your account has been
+                successfully created, and you're now part of our growing community.
+              </p>
+
+              <p style="margin:0 0 25px; font-size:15px; line-height:1.8; color:#4b5563;">
+                We're looking forward to being part of your journey.
+                Here are your creator registration details.
+              </p>
+
+              <!-- Creator Code Card -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0"
+                style="background-color:#f8fafc; border:1px solid #e5e7eb; border-radius:10px;">
+
+                <tr>
+                  <td align="center" style="padding:25px 20px;">
+
+                    <p style="margin:0 0 12px; color:#64748b; font-size:12px; font-weight:700; letter-spacing:1.5px;">
+                      YOUR CREATOR CODE
+                    </p>
+
+                    <h1 style="margin:0; color:#111827; font-size:30px; letter-spacing:3px; font-weight:700;">
+                      {{creatorCode}}
+                    </h1>
+
+                    <p style="margin:14px 0 0; color:#64748b; font-size:13px;">
+                      Your unique creator identification code.
+                    </p>
+
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Information -->
+              <p style="margin:25px 0 10px; font-size:14px; line-height:1.7; color:#4b5563;">
+                Keep your creator code safe. You may need it when accessing
+                creator-related features or services on our platform.
+              </p>
+
+              <!-- CTA -->
+              {{#if dashboardUrl}}
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="center" style="padding:25px 0 15px;">
+
+                    <a href="{{dashboardUrl}}"
+                      style="display:inline-block; background-color:#2563eb; color:#ffffff; text-decoration:none; padding:15px 35px; border-radius:7px; font-size:14px; font-weight:700;">
+                      Explore Your Dashboard
+                    </a>
+
+                  </td>
+                </tr>
+              </table>
+              {{/if}}
+
+              <p style="margin:20px 0 0; font-size:14px; line-height:1.7; color:#4b5563;">
+                If you have any questions or need assistance, feel free to
+                contact our support team.
+              </p>
+
+              <p style="margin:25px 0 0; font-size:14px; color:#374151;">
+                Best regards,<br>
+                <strong>{{companyName}} Team</strong>
+              </p>
+
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td align="center"
+              style="background-color:#f8fafc; padding:25px 20px; border-top:1px solid #e5e7eb;">
+
+              <p style="margin:0 0 10px; color:#64748b; font-size:12px;">
+                © {{year}} {{companyName}}. All rights reserved.
+              </p>
+
+              <p style="margin:0; color:#94a3b8; font-size:11px; line-height:1.6;">
+                You are receiving this email because an account was
+                registered using this email address.
+              </p>
+
+              {{#if supportEmail}}
+              <p style="margin:12px 0 0; font-size:12px;">
+                <a href="mailto:{{supportEmail}}"
+                  style="color:#2563eb; text-decoration:none;">
+                  Contact Support
+                </a>
+              </p>
+              {{/if}}
+
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+
+  </table>
+
+</body>
+</html>

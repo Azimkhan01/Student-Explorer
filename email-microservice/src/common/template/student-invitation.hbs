@@ -1,0 +1,145 @@
+ 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Welcome to {{companyName}}</title>
+</head>
+
+<body style="margin:0; padding:0; background-color:#f4f5f7; font-family:Arial, Helvetica, sans-serif;">
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5f7; padding:40px 15px;">
+        <tr>
+            <td align="center">
+
+                <table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px; background-color:#ffffff; border-radius:12px; overflow:hidden;">
+
+                    <!-- Header -->
+                    <tr>
+                        <td align="center" style="background-color:#1d4ed8; padding:30px 20px;">
+                            <h1 style="margin:0; color:#ffffff; font-size:25px;">
+                                {{companyName}}
+                            </h1>
+
+                            <p style="margin:10px 0 0; color:#dbeafe; font-size:13px;">
+                                STUDENT ACADEMIC PORTAL
+                            </p>
+                        </td>
+                    </tr>
+
+                    <!-- Main Content -->
+                    <tr>
+                        <td style="padding:35px 30px;">
+
+                            <h2 style="margin:0 0 15px; color:#111827; font-size:22px;">
+                                Welcome, {{username}}!
+                            </h2>
+
+                            <p style="color:#4b5563; font-size:14px; line-height:1.7;">
+                                Great news! You have been added to a class at
+                                <strong>{{companyName}}</strong>.
+                            </p>
+
+                            <p style="color:#4b5563; font-size:14px; line-height:1.7;">
+                                We are excited to have you join our academic community.
+                                Please complete your student registration to access
+                                your academic activities and get started.
+                            </p>
+
+                            <!-- Student Details -->
+                            <table width="100%" cellpadding="12" cellspacing="0"
+                                style="background-color:#f9fafb; border-radius:8px; margin:25px 0;">
+
+                                <tr>
+                                    <td style="color:#6b7280; font-size:13px;">
+                                        Student Username
+                                    </td>
+                                    <td align="right" style="color:#111827; font-size:13px; font-weight:bold;">
+                                        {{username}}
+                                    </td>
+                                </tr>
+
+                                <tr>
+                                    <td style="color:#6b7280; font-size:13px;">
+                                        Email Address
+                                    </td>
+                                    <td align="right" style="color:#111827; font-size:13px; font-weight:bold;">
+                                        {{email}}
+                                    </td>
+                                </tr>
+
+                                {{!-- <tr>
+                                    <td style="color:#6b7280; font-size:13px;">
+                                        Assigned Class
+                                    </td>
+                                    <td align="right" style="color:#111827; font-size:13px; font-weight:bold;">
+                                        {{className}}
+                                    </td>
+                                </tr>
+
+                                <tr>
+                                    <td style="color:#6b7280; font-size:13px;">
+                                        Academic Year
+                                    </td>
+                                    <td align="right" style="color:#111827; font-size:13px; font-weight:bold;">
+                                        {{academicYear}}
+                                    </td>
+                                </tr> --}}
+
+                            </table>
+
+                            <!-- Registration Button -->
+                            <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                    <td align="center" style="padding:15px 0;">
+
+                                        <a href="{{signupUrl}}"
+                                            style="display:inline-block; background-color:#2563eb; color:#ffffff; text-decoration:none; padding:14px 30px; border-radius:7px; font-size:14px; font-weight:bold;">
+                                            Complete Student Registration
+                                        </a>
+
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <p style="color:#6b7280; font-size:13px; line-height:1.7; margin-top:20px;">
+                                Click the button above to visit our signup page and
+                                complete your registration. Once registered, you
+                                can start your academic journey with us.
+                            </p>
+
+                            <p style="color:#9ca3af; font-size:12px; line-height:1.6;">
+                                If the button does not work, copy and paste this link
+                                into your browser:
+                                <br />
+                                <a href="{{signupUrl}}" style="color:#2563eb; word-break:break-all;">
+                                    {{signupUrl}}
+                                </a>
+                            </p>
+
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td align="center" style="background-color:#f9fafb; padding:20px;">
+                            <p style="margin:0; color:#9ca3af; font-size:12px;">
+                                If you believe this email was sent to you by mistake,
+                                please contact your academy administrator.
+                            </p>
+
+                            <p style="margin:12px 0 0; color:#9ca3af; font-size:11px;">
+                                &copy; {{companyName}}. All rights reserved.
+                            </p>
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>

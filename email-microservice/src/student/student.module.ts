@@ -1,0 +1,10 @@
+import { Module } from '@nestjs/common';
+import { StudentController } from './student.controller.js';
+import { StudentService } from './student.service.js';
+import { EmailService } from '../common/email/email.service.js';
+
+@Module({
+  controllers: [StudentController],
+  providers: [StudentService,EmailService]
+})
+export class StudentModule {}

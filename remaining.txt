@@ -1,0 +1,3 @@
+partailly the login page is maded succesfully 
+only the database part is reamining and other is the proper page route 
+jwt and cookie part is also come in the as well.
