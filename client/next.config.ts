@@ -4,6 +4,7 @@ const nextConfig: NextConfig = {
   experimental: {
     agentFeedback: true,
   },
+  allowedDevOrigins: ["192.168.0.109", "*.trycloudflare.com"],
   cacheComponents: true,
   partialPrefetching: true,
 

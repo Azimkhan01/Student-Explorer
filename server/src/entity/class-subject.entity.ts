@@ -12,6 +12,7 @@ import { AcademicYear } from './academic-year.entity.js';
 import { Teacher } from './teacher.entity.js';
 import { Subject } from './subject.entity.js';
 import { Class } from './class.entity.js';
+import { AttendanceSession } from './attendance-session.entity.js';
 
 
 @Entity('class_subjects')
@@ -62,4 +63,10 @@ export class ClassSubject {
     (exam) => exam.classSubject,
   )
   exams: Relation<Exam[]>;
+
+  @OneToMany(
+    () => AttendanceSession,
+    (attendanceSession) => attendanceSession.classSubject,
+  )
+  attendanceSessions: Relation<AttendanceSession[]>;
 }

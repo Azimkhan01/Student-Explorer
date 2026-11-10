@@ -1,27 +1,34 @@
+
 import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
   JoinColumn,
+  Unique,
+  CreateDateColumn,
   type Relation,
 } from 'typeorm';
 
-import { Student } from './student.entity.js';
+import { StudentEnrollment } from './student-enrollment.entity.js';
 import { ClassSubject } from './class-subject.entity.js';
 
 @Entity('attendance')
+@Unique(
+  'UQ_attendance_enrollment_subject_date',
+  ['studentEnrollment', 'classSubject', 'attendanceDate'],
+)
 export class Attendance {
   @PrimaryGeneratedColumn()
   id: number;
 
   @ManyToOne(
-    () => Student,
-    (student) => student.attendanceRecords,
+    () => StudentEnrollment,
+    (enrollment) => enrollment.attendanceRecords,
     { onDelete: 'NO ACTION', onUpdate: 'NO ACTION' },
   )
-  @JoinColumn({ name: 'student_id' })
-  student: Relation<Student>;
+  @JoinColumn({ name: 'student_enrollment_id' })
+  studentEnrollment: Relation<StudentEnrollment>;
 
   @ManyToOne(
     () => ClassSubject,
@@ -31,9 +38,15 @@ export class Attendance {
   @JoinColumn({ name: 'class_subject_id' })
   classSubject: Relation<ClassSubject>;
 
-  @Column({ type: 'date' })
-  date: string;
+  @Column({ type: 'date', name: 'attendance_date' })
+  attendanceDate: string;
 
   @Column({ type: 'varchar', length: 20 })
   status: string;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  remarks: string | null;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
 }

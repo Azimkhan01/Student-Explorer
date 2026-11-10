@@ -8,3 +8,4 @@ export * from './class-subject.entity.js';
 export * from './attendance.entity.js';
 export * from './exam.entity.js';
 export * from './exam-result.entity.js';
+export * from './attendance-session.entity.js';

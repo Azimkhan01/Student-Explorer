@@ -10,6 +10,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TeacherModule } from './teacher/teacher.module.js';
 import { AcademicModule } from './academic/academic.module.js';
 import { StudentEnrollmentModule } from './student-enrollment/student-enrollment.module.js';
+import { AttendanceModule } from './attendance/attendance.module.js';
 import * as Entities from './entity/index.js';
 
 @Module({
@@ -34,6 +35,7 @@ import * as Entities from './entity/index.js';
     TeacherModule,
     AcademicModule,
     StudentEnrollmentModule,
+    AttendanceModule,
   ],
 
   controllers: [AppController],

@@ -6,7 +6,7 @@ import {
   type Relation,
 } from 'typeorm';
 import { StudentEnrollment } from './student-enrollment.entity.js';
-import { Attendance } from './attendance.entity.js';
+// import { Attendance } from './attendance.entity.js';
 import { ExamResult } from './exam-result.entity.js';
 
 
@@ -55,11 +55,11 @@ export class Student {
   )
   enrollments: Relation<StudentEnrollment[]>;
 
-  @OneToMany(
-    () => Attendance,
-    (attendance) => attendance.student,
-  )
-  attendanceRecords: Relation<Attendance[]>;
+  // @OneToMany(
+  //   () => Attendance,
+  //   (attendance) => attendance.student,
+  // )
+  // attendanceRecords: Relation<Attendance[]>;
 
   @OneToMany(
     () => ExamResult,

@@ -1,8 +1,10 @@
+
 import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
+  OneToMany,
   JoinColumn,
   type Relation,
   Unique,
@@ -11,6 +13,7 @@ import {
 import { Student } from './student.entity.js';
 import { Class } from './class.entity.js';
 import { AcademicYear } from './academic-year.entity.js';
+import { Attendance } from './attendance.entity.js';
 
 @Entity('student_enrollments')
 @Unique('UQ_student_academic_year', ['student', 'academicYear'])
@@ -52,4 +55,11 @@ export class StudentEnrollment {
 
   @Column({ type: 'varchar', length: 25 })
   status: string;
+
+  // Attendance relationship
+  @OneToMany(
+    () => Attendance,
+    (attendance) => attendance.studentEnrollment,
+  )
+  attendanceRecords: Relation<Attendance[]>;
 }
