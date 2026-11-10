@@ -11,6 +11,9 @@ import { TeacherModule } from './teacher/teacher.module.js';
 import { AcademicModule } from './academic/academic.module.js';
 import { StudentEnrollmentModule } from './student-enrollment/student-enrollment.module.js';
 import { AttendanceModule } from './attendance/attendance.module.js';
+import { ExamModule } from './exam/exam.module.js';
+import { ExamResultModule } from './exam-result/exam-result.module.js';
+import { StudentExamResultModule } from './student-exam-result/student-exam-result.module.js';
 import * as Entities from './entity/index.js';
 
 @Module({
@@ -36,6 +39,9 @@ import * as Entities from './entity/index.js';
     AcademicModule,
     StudentEnrollmentModule,
     AttendanceModule,
+    ExamModule,
+    ExamResultModule,
+    StudentExamResultModule,
   ],
 
   controllers: [AppController],

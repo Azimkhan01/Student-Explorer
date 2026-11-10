@@ -14,6 +14,7 @@ import {
   CalendarCheck,
   FileChartColumn,
   UserRound,
+  SquareCheckBig
 } from "lucide-react";
 
 const iconMap = {
@@ -24,6 +25,7 @@ const iconMap = {
   "calendar-check": CalendarCheck,
   "file-chart-column": FileChartColumn,
   "user-round": UserRound,
+  'square-check-big':SquareCheckBig
 };
 
 interface NavbarLink {

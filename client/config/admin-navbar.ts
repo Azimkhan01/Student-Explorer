@@ -20,4 +20,9 @@ export const adminNavbarLinks = [
     link: "/admin/academic-setup",
     logo: "graduation-cap",
   },
+  {
+    name: "Exam",
+    link: "/admin/exam",
+    logo: "square-check-big",
+  },
 ] as const;

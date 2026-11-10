@@ -1,9 +1,12 @@
+// exam-result.entity.ts
+
 import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
   JoinColumn,
+  Unique,
   type Relation,
 } from 'typeorm';
 
@@ -11,6 +14,7 @@ import { Exam } from './exam.entity.js';
 import { Student } from './student.entity.js';
 
 @Entity('exam_results')
+@Unique('UQ_exam_result_exam_student', ['exam', 'student'])
 export class ExamResult {
   @PrimaryGeneratedColumn()
   id: number;
@@ -18,7 +22,7 @@ export class ExamResult {
   @ManyToOne(
     () => Exam,
     (exam) => exam.results,
-    { onDelete: 'NO ACTION', onUpdate: 'NO ACTION' },
+    { onDelete: 'CASCADE' },
   )
   @JoinColumn({ name: 'exam_id' })
   exam: Relation<Exam>;
@@ -26,7 +30,7 @@ export class ExamResult {
   @ManyToOne(
     () => Student,
     (student) => student.examResults,
-    { onDelete: 'NO ACTION', onUpdate: 'NO ACTION' },
+    { onDelete: 'CASCADE' },
   )
   @JoinColumn({ name: 'student_id' })
   student: Relation<Student>;
@@ -34,6 +38,6 @@ export class ExamResult {
   @Column({ name: 'marks_obtained', type: 'integer' })
   marksObtained: number;
 
-  @Column({ type: 'varchar', length: 255 })
-  remarks: string;
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  remarks: string | null;
 }

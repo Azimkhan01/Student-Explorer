@@ -64,4 +64,6 @@ export class StudentController {
     remove(@Param('id', ParseIntPipe) id: number) {
         return this.studentsService.remove(id);
     }
+
+    
 }

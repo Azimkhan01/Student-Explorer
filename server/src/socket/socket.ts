@@ -12,7 +12,7 @@ import { Server, Socket } from "socket.io";
 @WebSocketGateway({
   namespace: "/",
   cors: {
-    origin: "http://localhost:3001", // Your Next.js URL
+    origin:process.env.CLIENT_URL || 'http://localhost:3001', // Your Next.js URL
     credentials: true,
   },
   transports: ["websocket", "polling"],

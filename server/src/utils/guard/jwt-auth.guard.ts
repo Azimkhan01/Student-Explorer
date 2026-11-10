@@ -52,7 +52,7 @@ export class JwtAuthGuard implements CanActivate {
         new TextEncoder().encode(secret),
       );
 
-      console.log(payload);
+      // console.log(payload);
       
 
       // Validate role
