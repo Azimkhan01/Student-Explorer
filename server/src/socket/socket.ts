@@ -17,6 +17,11 @@ const AVATARS = [
   "🐧", "🦉", "🐳", "🦋", "🚀", "⭐", "🔥", "🎮",
 ];
 
+// Reactions only the teacher can send (allow-list, nothing else is broadcast).
+const TEACHER_REACTIONS = ["👏", "🔥", "🎉", "😮", "💡", "❤️", "😂", "🚀"];
+
+const MAX_TEACHER_MESSAGE_LENGTH = 140;
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Safety net: Redis deletes room keys this long after the last activity,
@@ -65,6 +70,17 @@ interface QuizData {
   questions: Question[];
 }
 
+// Who answered what, revealed to everyone once a question ends.
+interface QuestionResult {
+  socketId: string;
+  username: string;
+  avatar: string;
+  status: "correct" | "wrong" | "unanswered";
+  selectedOptionIndex: number | null;
+  responseTimeMs: number | null;
+  earnedMarks: number;
+}
+
 @WebSocketGateway({
   namespace: "/",
   cors: {
@@ -81,6 +97,9 @@ export class CreateSocket
 
   private questionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // Tiny in-memory throttle so a teacher can't flood the room.
+  private lastBroadcastAt = new Map<string, number>();
 
   constructor(private readonly redisService: RedisService) {}
 
@@ -112,7 +131,12 @@ export class CreateSocket
     return `quickzy-room:${roomId}:answers:${questionIndex}`;
   }
 
-  // Matches every key that belongs to one room (including answers).
+  // Emails the teacher removed from this room (hash: email -> "1").
+  private bannedKey(roomId: string) {
+    return `quickzy-room:${roomId}:banned`;
+  }
+
+  // Matches every key that belongs to one room (including answers + banned).
   private roomPattern(roomId: string) {
     const safe = roomId.replace(/[\\*?[\]]/g, "\\$&");
     return `quickzy-room:${safe}:*`;
@@ -129,6 +153,7 @@ export class CreateSocket
       this.roomUsersKey(roomId),
       this.quizKey(roomId),
       this.testStateKey(roomId),
+      this.bannedKey(roomId),
       this.roomCodeKey(code),
     ];
 
@@ -157,7 +182,7 @@ export class CreateSocket
         code = meta?.code;
       }
 
-      // meta, users, quiz, test-state and every answers:<n> hash.
+      // meta, users, quiz, test-state, banned and every answers:<n> hash.
       await this.redisService.deleteByPattern(this.roomPattern(roomId));
 
       // Join-code lookup key.
@@ -169,6 +194,19 @@ export class CreateSocket
     } catch (error) {
       console.error("Destroy room error:", error);
     }
+  }
+
+  // true => the caller is sending too fast and should be ignored.
+  private isRateLimited(socketId: string, minGapMs: number) {
+    const now = Date.now();
+    const last = this.lastBroadcastAt.get(socketId) ?? 0;
+    if (now - last < minGapMs) return true;
+    this.lastBroadcastAt.set(socketId, now);
+    return false;
+  }
+
+  private makeEventId() {
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
   // -----------------------------------------
@@ -185,6 +223,8 @@ export class CreateSocket
 
   async handleDisconnect(client: Socket) {
     console.log("Client disconnected:", client.id);
+
+    this.lastBroadcastAt.delete(client.id);
 
     const { role, roomId } = client.data;
 
@@ -359,6 +399,19 @@ export class CreateSocket
         return;
       }
 
+      // The teacher removed this person earlier: keep them out.
+      const isBanned = await this.redisService.hExists(
+        this.bannedKey(roomId),
+        email,
+      );
+
+      if (isBanned) {
+        client.emit("room-error", {
+          message: "The teacher removed you from this quiz.",
+        });
+        return;
+      }
+
       await client.join(roomId);
 
       client.data.role = "student";
@@ -483,6 +536,157 @@ export class CreateSocket
       console.error("Start test error:", error);
       client.emit("test-error", {
         message: "Unable to start the test.",
+      });
+    }
+  }
+
+  // -----------------------------------------
+  // TEACHER-ONLY: REACTIONS + MESSAGES
+  // -----------------------------------------
+
+  @SubscribeMessage("teacher-reaction")
+  async teacherReaction(
+    @MessageBody() payload: { emoji?: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    try {
+      if (client.data.role !== "teacher" || !client.data.roomId) return;
+
+      const emoji = String(payload?.emoji ?? "");
+      if (!TEACHER_REACTIONS.includes(emoji)) return;
+
+      if (this.isRateLimited(client.id, 150)) return;
+
+      this.server.to(client.data.roomId).emit("teacher-reaction", {
+        id: this.makeEventId(),
+        emoji,
+      });
+    } catch (error) {
+      console.error("Teacher reaction error:", error);
+    }
+  }
+
+  @SubscribeMessage("teacher-message")
+  async teacherMessage(
+    @MessageBody() payload: { text?: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    try {
+      if (client.data.role !== "teacher" || !client.data.roomId) return;
+
+      const text = String(payload?.text ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, MAX_TEACHER_MESSAGE_LENGTH);
+
+      if (!text) return;
+
+      if (this.isRateLimited(client.id, 600)) {
+        client.emit("test-error", {
+          message: "Slow down a little before sending another message.",
+        });
+        return;
+      }
+
+      this.server.to(client.data.roomId).emit("teacher-message", {
+        id: this.makeEventId(),
+        text,
+        sentAt: Date.now(),
+      });
+    } catch (error) {
+      console.error("Teacher message error:", error);
+    }
+  }
+
+  // -----------------------------------------
+  // TEACHER-ONLY: REMOVE A STUDENT
+  // -----------------------------------------
+
+  @SubscribeMessage("remove-student")
+  async removeStudentByTeacher(
+    @MessageBody() payload: { socketId?: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    try {
+      if (client.data.role !== "teacher" || !client.data.roomId) return;
+
+      const roomId = client.data.roomId;
+      const targetId =
+        typeof payload?.socketId === "string" ? payload.socketId : "";
+
+      if (!targetId) return;
+
+      const meta = await this.redisService.getObject<RoomMeta>(
+        this.roomMetaKey(roomId),
+      );
+
+      if (!meta || meta.teacherSocketId !== client.id) return;
+
+      const raw = await this.redisService.hGet(
+        this.roomUsersKey(roomId),
+        targetId,
+      );
+
+      if (!raw) {
+        client.emit("test-error", {
+          message: "That student is no longer in the room.",
+        });
+        return;
+      }
+
+      const student = JSON.parse(raw) as Student;
+
+      // 1) Forget the student and block their email from rejoining.
+      await this.redisService.hDel(this.roomUsersKey(roomId), targetId);
+
+      await this.redisService.hSet(
+        this.bannedKey(roomId),
+        student.email,
+        "1",
+      );
+      await this.redisService.expire(this.bannedKey(roomId), ROOM_TTL_SECONDS);
+
+      // 2) Drop their answer for the running question so counts stay right.
+      const state = await this.redisService.getObject<TestState>(
+        this.testStateKey(roomId),
+      );
+
+      let answeredCount = 0;
+
+      if (state && state.currentQuestionIndex >= 0) {
+        const answerKey = this.answersKey(roomId, state.currentQuestionIndex);
+        await this.redisService.hDel(answerKey, targetId);
+        answeredCount = await this.redisService.hLen(answerKey);
+      }
+
+      // 3) Tell the student and take them out of the socket room.
+      const targets = await this.server.in(targetId).fetchSockets();
+
+      for (const target of targets) {
+        target.emit("removed-from-room", {
+          message: "The teacher removed you from this quiz.",
+        });
+        target.leave(roomId);
+      }
+
+      // 4) Refresh everyone else.
+      const students = await this.getRoomStudents(roomId);
+      const leaderboard = await this.getLeaderboard(roomId);
+
+      this.server.to(roomId).emit("student-removed", {
+        socketId: targetId,
+        username: student.username,
+        answeredCount,
+      });
+
+      this.server.to(meta.teacherSocketId).emit("room-users", students);
+      this.server.to(roomId).emit("leaderboard-updated", leaderboard);
+
+      console.log("Student removed by teacher:", student.username);
+    } catch (error) {
+      console.error("Remove student (teacher) error:", error);
+      client.emit("test-error", {
+        message: "Unable to remove the student.",
       });
     }
   }
@@ -755,11 +959,24 @@ export class CreateSocket
     );
     const students = await this.getRoomStudents(roomId);
 
+    const results: QuestionResult[] = [];
+    const distribution = question.options.map(() => 0);
+
     await Promise.all(
       students.map(async (student) => {
         const raw = answers[student.socketId];
 
         if (!raw) {
+          results.push({
+            socketId: student.socketId,
+            username: student.username,
+            avatar: student.avatar,
+            status: "unanswered",
+            selectedOptionIndex: null,
+            responseTimeMs: null,
+            earnedMarks: 0,
+          });
+
           this.server.to(student.socketId).emit("answer-result", {
             answered: false,
             isCorrect: false,
@@ -777,6 +994,20 @@ export class CreateSocket
 
         const isCorrect = answer.selectedOptionIndex === correctOptionIndex;
         const earnedMarks = isCorrect ? marks : 0;
+
+        if (distribution[answer.selectedOptionIndex] !== undefined) {
+          distribution[answer.selectedOptionIndex] += 1;
+        }
+
+        results.push({
+          socketId: student.socketId,
+          username: student.username,
+          avatar: student.avatar,
+          status: isCorrect ? "correct" : "wrong",
+          selectedOptionIndex: answer.selectedOptionIndex,
+          responseTimeMs: answer.responseTimeMs,
+          earnedMarks,
+        });
 
         student.score += earnedMarks;
         student.totalTimeMs += answer.responseTimeMs;
@@ -798,12 +1029,27 @@ export class CreateSocket
       }),
     );
 
+    // correct (fastest first) -> wrong (fastest first) -> unanswered (A-Z)
+    const statusOrder = { correct: 0, wrong: 1, unanswered: 2 } as const;
+
+    results.sort((a, b) => {
+      if (a.status !== b.status) {
+        return statusOrder[a.status] - statusOrder[b.status];
+      }
+      if (a.status === "unanswered") {
+        return a.username.localeCompare(b.username);
+      }
+      return (a.responseTimeMs ?? 0) - (b.responseTimeMs ?? 0);
+    });
+
     const leaderboard = await this.getLeaderboard(roomId);
 
     this.server.to(roomId).emit("question-ended", {
       questionIndex,
       correctOptionIndex,
       leaderboard,
+      results,
+      distribution,
     });
 
     this.server.to(roomId).emit("leaderboard-updated", leaderboard);
@@ -966,6 +1212,14 @@ export class CreateSocket
 
       // Room already destroyed.
       if (!meta) return;
+
+      // Already removed (for example by the teacher): nothing left to do.
+      const stillInRoom = await this.redisService.hExists(
+        this.roomUsersKey(roomId),
+        client.id,
+      );
+
+      if (!stillInRoom) return;
 
       await this.redisService.hDel(this.roomUsersKey(roomId), client.id);
 
