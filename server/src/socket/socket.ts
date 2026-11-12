@@ -1,4 +1,3 @@
-
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -13,6 +12,21 @@ import {
 import { Server, Socket } from "socket.io";
 import { RedisService } from "../utils/redis/redis.service.js";
 
+const AVATARS = [
+  "🦊", "🐼", "🦁", "🐯", "🐸", "🐵", "🦄", "🐙",
+  "🐧", "🦉", "🐳", "🦋", "🚀", "⭐", "🔥", "🎮",
+];
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Safety net: Redis deletes room keys this long after the last activity,
+// even if the server crashed and no cleanup code ever ran.
+const ROOM_TTL_SECONDS = 6 * 60 * 60; // 6 hours
+
+// After the final leaderboard, keep the room this long so students can
+// read their results. Then everything is deleted.
+const FINISHED_GRACE_MS = 10 * 60 * 1000; // 10 minutes
+
 interface Question {
   id?: string;
   question: string;
@@ -25,6 +39,7 @@ interface Student {
   socketId: string;
   email: string;
   username: string;
+  avatar: string;
   score: number;
   totalTimeMs: number;
   answeredQuestions: number;
@@ -65,8 +80,13 @@ export class CreateSocket
   server: Server;
 
   private questionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly redisService: RedisService) {}
+
+  // -----------------------------------------
+  // KEYS
+  // -----------------------------------------
 
   private roomMetaKey(roomId: string) {
     return `quickzy-room:${roomId}:meta`;
@@ -92,6 +112,69 @@ export class CreateSocket
     return `quickzy-room:${roomId}:answers:${questionIndex}`;
   }
 
+  // Matches every key that belongs to one room (including answers).
+  private roomPattern(roomId: string) {
+    const safe = roomId.replace(/[\\*?[\]]/g, "\\$&");
+    return `quickzy-room:${safe}:*`;
+  }
+
+  // -----------------------------------------
+  // LIFECYCLE / CLEANUP HELPERS
+  // -----------------------------------------
+
+  // Push the TTL of the room's core keys forward. Called on activity.
+  private async touchRoom(roomId: string, code: number) {
+    const keys = [
+      this.roomMetaKey(roomId),
+      this.roomUsersKey(roomId),
+      this.quizKey(roomId),
+      this.testStateKey(roomId),
+      this.roomCodeKey(code),
+    ];
+
+    await Promise.all(
+      keys.map((k) => this.redisService.expire(k, ROOM_TTL_SECONDS)),
+    );
+  }
+
+  // Delete every Redis key and in-memory timer that belongs to a room.
+  private async destroyRoom(roomId: string, knownCode?: number) {
+    const qTimer = this.questionTimers.get(roomId);
+    if (qTimer) clearTimeout(qTimer);
+    this.questionTimers.delete(roomId);
+
+    const cTimer = this.cleanupTimers.get(roomId);
+    if (cTimer) clearTimeout(cTimer);
+    this.cleanupTimers.delete(roomId);
+
+    try {
+      let code = knownCode;
+
+      if (code === undefined) {
+        const meta = await this.redisService.getObject<RoomMeta>(
+          this.roomMetaKey(roomId),
+        );
+        code = meta?.code;
+      }
+
+      // meta, users, quiz, test-state and every answers:<n> hash.
+      await this.redisService.deleteByPattern(this.roomPattern(roomId));
+
+      // Join-code lookup key.
+      if (code !== undefined) {
+        await this.redisService.delete(this.roomCodeKey(code));
+      }
+
+      console.log("Live quiz room cleaned up:", roomId);
+    } catch (error) {
+      console.error("Destroy room error:", error);
+    }
+  }
+
+  // -----------------------------------------
+  // GATEWAY HOOKS
+  // -----------------------------------------
+
   afterInit(server: Server) {
     console.log("Live Quiz Socket Gateway Initialized");
   }
@@ -99,10 +182,6 @@ export class CreateSocket
   handleConnection(client: Socket) {
     console.log("Client connected:", client.id);
   }
-
-  // -----------------------------------------
-  // DISCONNECT
-  // -----------------------------------------
 
   async handleDisconnect(client: Socket) {
     console.log("Client disconnected:", client.id);
@@ -163,8 +242,7 @@ export class CreateSocket
 
       const teacherId = String(payload.teacher_id);
 
-      const roomId =
-        `${payload.code}-${payload.quickzyId}-${teacherId}`;
+      const roomId = `${payload.code}-${payload.quickzyId}-${teacherId}`;
 
       const meta: RoomMeta = {
         roomId,
@@ -187,14 +265,22 @@ export class CreateSocket
       client.data.role = "teacher";
       client.data.roomId = roomId;
 
-      await this.redisService.set(codeKey, roomId);
-      await this.redisService.setObject(this.roomMetaKey(roomId), meta);
-      await this.redisService.setObject(this.quizKey(roomId), {
-        questions: payload.questions,
-      });
+      // Every key is created with a TTL so nothing can live forever.
+      await this.redisService.set(codeKey, roomId, ROOM_TTL_SECONDS);
+      await this.redisService.setObject(
+        this.roomMetaKey(roomId),
+        meta,
+        ROOM_TTL_SECONDS,
+      );
+      await this.redisService.setObject(
+        this.quizKey(roomId),
+        { questions: payload.questions },
+        ROOM_TTL_SECONDS,
+      );
       await this.redisService.setObject(
         this.testStateKey(roomId),
         initialState,
+        ROOM_TTL_SECONDS,
       );
 
       client.emit("room-created", {
@@ -226,18 +312,27 @@ export class CreateSocket
       code: number;
       email: string;
       username: string;
+      avatar?: string;
     },
     @ConnectedSocket() client: Socket,
   ) {
     try {
-      if (
-        !payload ||
-        !Number.isInteger(payload.code) ||
-        !payload.email ||
-        !payload.username
-      ) {
+      if (!payload || !Number.isInteger(payload.code)) {
         client.emit("room-error", {
-          message: "Please provide valid student information and room code.",
+          message: "Please provide a valid room code.",
+        });
+        return;
+      }
+
+      const username = String(payload.username ?? "").trim().slice(0, 24);
+      const email = String(payload.email ?? "")
+        .trim()
+        .toLowerCase()
+        .slice(0, 254);
+
+      if (username.length < 2 || !EMAIL_RE.test(email)) {
+        client.emit("room-error", {
+          message: "Please enter a valid name and email address.",
         });
         return;
       }
@@ -268,13 +363,19 @@ export class CreateSocket
 
       client.data.role = "student";
       client.data.roomId = roomId;
-      client.data.email = payload.email;
-      client.data.username = payload.username;
+      client.data.email = email;
+      client.data.username = username;
+
+      // Only allow avatars from the allow-list.
+      const avatar = AVATARS.includes(payload.avatar ?? "")
+        ? (payload.avatar as string)
+        : AVATARS[0];
 
       const student: Student = {
         socketId: client.id,
-        email: payload.email,
-        username: payload.username,
+        email,
+        username,
+        avatar,
         score: 0,
         totalTimeMs: 0,
         answeredQuestions: 0,
@@ -285,6 +386,8 @@ export class CreateSocket
         client.id,
         JSON.stringify(student),
       );
+
+      await this.touchRoom(roomId, meta.code);
 
       const students = await this.getRoomStudents(roomId);
 
@@ -313,8 +416,9 @@ export class CreateSocket
         this.emitQuestionToStudent(client, state, quiz.questions);
       }
 
+      // Broadcast so every student's participant count stays correct.
       const leaderboard = await this.getLeaderboard(roomId);
-      client.emit("leaderboard-updated", leaderboard);
+      this.server.to(roomId).emit("leaderboard-updated", leaderboard);
 
       console.log("Student joined:", student.username);
     } catch (error) {
@@ -368,10 +472,11 @@ export class CreateSocket
         Math.max(5, Number(payload?.durationSeconds) || 20),
       );
 
-      await this.redisService.setObject(this.testStateKey(roomId), {
-        ...state,
-        durationSeconds,
-      });
+      await this.redisService.setObject(
+        this.testStateKey(roomId),
+        { ...state, durationSeconds },
+        ROOM_TTL_SECONDS,
+      );
 
       await this.startQuestion(roomId, 0);
     } catch (error) {
@@ -386,16 +491,17 @@ export class CreateSocket
   // START QUESTION
   // -----------------------------------------
 
-  private async startQuestion(
-    roomId: string,
-    questionIndex: number,
-  ) {
+  private async startQuestion(roomId: string, questionIndex: number) {
     const quiz = await this.redisService.getObject<QuizData>(
       this.quizKey(roomId),
     );
 
     const state = await this.redisService.getObject<TestState>(
       this.testStateKey(roomId),
+    );
+
+    const meta = await this.redisService.getObject<RoomMeta>(
+      this.roomMetaKey(roomId),
     );
 
     if (!quiz || !state) return;
@@ -420,11 +526,13 @@ export class CreateSocket
     await this.redisService.setObject(
       this.testStateKey(roomId),
       nextState,
+      ROOM_TTL_SECONDS,
     );
 
-    await this.redisService.delete(
-      this.answersKey(roomId, questionIndex),
-    );
+    // Activity: keep the rest of the room alive too.
+    if (meta) await this.touchRoom(roomId, meta.code);
+
+    await this.redisService.delete(this.answersKey(roomId, questionIndex));
 
     // Never send correct_answer to students.
     const safeQuestion = {
@@ -441,6 +549,7 @@ export class CreateSocket
       durationSeconds: state.durationSeconds,
       startedAt,
       endsAt,
+      serverNow: Date.now(),
     });
 
     const existingTimer = this.questionTimers.get(roomId);
@@ -473,11 +582,13 @@ export class CreateSocket
       durationSeconds: state.durationSeconds,
       startedAt: state.questionStartedAt,
       endsAt: state.questionEndsAt,
+      serverNow: Date.now(),
     });
   }
 
   // -----------------------------------------
   // STUDENT SUBMITS ANSWER
+  // (stores the choice only; nothing is revealed until the timer ends)
   // -----------------------------------------
 
   @SubscribeMessage("submit-answer")
@@ -548,71 +659,49 @@ export class CreateSocket
 
       if (alreadyAnswered) {
         client.emit("answer-error", {
+          code: "ALREADY_ANSWERED",
           message: "You have already submitted your answer.",
         });
         return;
       }
 
-      const userString = await this.redisService.hGet(
+      const userExists = await this.redisService.hExists(
         this.roomUsersKey(roomId),
         client.id,
       );
 
-      if (!userString) {
+      if (!userExists) {
         client.emit("answer-error", {
           message: "Your student session was not found.",
         });
         return;
       }
 
-      const student: Student = JSON.parse(userString);
-
       const responseTimeMs = Math.max(
         0,
         Date.now() - (state.questionStartedAt ?? Date.now()),
       );
 
-      const correctOptionIndex = Number(question.correct_answer);
-      const isCorrect =
-        payload.selectedOptionIndex === correctOptionIndex;
-
-      const earnedMarks = isCorrect ? Number(question.marks) || 0 : 0;
-
-      student.score += earnedMarks;
-      student.totalTimeMs += responseTimeMs;
-      student.answeredQuestions += 1;
-
-      // One answer per socket per question.
+      // Only store the choice. Scoring happens when the question ends.
       await this.redisService.hSet(
         answerKey,
         client.id,
         JSON.stringify({
           selectedOptionIndex: payload.selectedOptionIndex,
-          isCorrect,
           responseTimeMs,
-          earnedMarks,
         }),
       );
 
-      await this.redisService.hSet(
-        this.roomUsersKey(roomId),
-        client.id,
-        JSON.stringify(student),
-      );
+      // The answers hash gets its own TTL so it can never outlive the room.
+      await this.redisService.expire(answerKey, ROOM_TTL_SECONDS);
 
-      client.emit("answer-result", {
-        isCorrect,
-        earnedMarks,
+      client.emit("answer-locked", {
+        questionIndex: state.currentQuestionIndex,
         responseTimeMs,
-        message: isCorrect ? "Correct answer!" : "Incorrect answer.",
       });
 
-      const leaderboard = await this.getLeaderboard(roomId);
-
-      this.server.to(roomId).emit("leaderboard-updated", leaderboard);
-
       this.server.to(roomId).emit("answer-received", {
-        username: student.username,
+        socketId: client.id,
         answeredCount: await this.redisService.hLen(answerKey),
       });
     } catch (error) {
@@ -625,13 +714,10 @@ export class CreateSocket
   }
 
   // -----------------------------------------
-  // FINISH QUESTION
+  // FINISH QUESTION (scoring + reveal happen only here)
   // -----------------------------------------
 
-  private async finishQuestion(
-    roomId: string,
-    questionIndex: number,
-  ) {
+  private async finishQuestion(roomId: string, questionIndex: number) {
     const state = await this.redisService.getObject<TestState>(
       this.testStateKey(roomId),
     );
@@ -654,21 +740,96 @@ export class CreateSocket
     this.questionTimers.delete(roomId);
 
     const question = quiz.questions[questionIndex];
+    const correctOptionIndex = Number(question.correct_answer);
+    const marks = Number(question.marks) || 0;
 
-    await this.redisService.setObject(this.testStateKey(roomId), {
-      ...state,
-      status: "question-ended",
-    });
+    // Lock first: late answers and duplicate timers are rejected.
+    await this.redisService.setObject(
+      this.testStateKey(roomId),
+      { ...state, status: "question-ended" },
+      ROOM_TTL_SECONDS,
+    );
+
+    const answers = await this.redisService.hGetAll(
+      this.answersKey(roomId, questionIndex),
+    );
+    const students = await this.getRoomStudents(roomId);
+
+    await Promise.all(
+      students.map(async (student) => {
+        const raw = answers[student.socketId];
+
+        if (!raw) {
+          this.server.to(student.socketId).emit("answer-result", {
+            answered: false,
+            isCorrect: false,
+            earnedMarks: 0,
+            selectedOptionIndex: null,
+            responseTimeMs: null,
+          });
+          return;
+        }
+
+        const answer = JSON.parse(raw) as {
+          selectedOptionIndex: number;
+          responseTimeMs: number;
+        };
+
+        const isCorrect = answer.selectedOptionIndex === correctOptionIndex;
+        const earnedMarks = isCorrect ? marks : 0;
+
+        student.score += earnedMarks;
+        student.totalTimeMs += answer.responseTimeMs;
+        student.answeredQuestions += 1;
+
+        await this.redisService.hSet(
+          this.roomUsersKey(roomId),
+          student.socketId,
+          JSON.stringify(student),
+        );
+
+        this.server.to(student.socketId).emit("answer-result", {
+          answered: true,
+          isCorrect,
+          earnedMarks,
+          selectedOptionIndex: answer.selectedOptionIndex,
+          responseTimeMs: answer.responseTimeMs,
+        });
+      }),
+    );
 
     const leaderboard = await this.getLeaderboard(roomId);
 
     this.server.to(roomId).emit("question-ended", {
       questionIndex,
-      correctOptionIndex: Number(question.correct_answer),
+      correctOptionIndex,
       leaderboard,
     });
 
     this.server.to(roomId).emit("leaderboard-updated", leaderboard);
+  }
+
+  // -----------------------------------------
+  // TEACHER ENDS THE QUESTION EARLY
+  // -----------------------------------------
+
+  @SubscribeMessage("end-question")
+  async endQuestion(@ConnectedSocket() client: Socket) {
+    try {
+      if (client.data.role !== "teacher" || !client.data.roomId) return;
+
+      const roomId = client.data.roomId;
+      const state = await this.redisService.getObject<TestState>(
+        this.testStateKey(roomId),
+      );
+
+      if (!state || state.status !== "running") return;
+
+      await this.finishQuestion(roomId, state.currentQuestionIndex);
+    } catch (error) {
+      console.error("End question error:", error);
+      client.emit("test-error", { message: "Unable to end the question." });
+    }
   }
 
   // -----------------------------------------
@@ -707,9 +868,7 @@ export class CreateSocket
   // -----------------------------------------
 
   private async getRoomStudents(roomId: string): Promise<Student[]> {
-    const users = await this.redisService.hGetAll(
-      this.roomUsersKey(roomId),
-    );
+    const users = await this.redisService.hGetAll(this.roomUsersKey(roomId));
 
     return Object.values(users).map((user) => JSON.parse(user));
   }
@@ -726,6 +885,7 @@ export class CreateSocket
         rank: index + 1,
         socketId: student.socketId,
         username: student.username,
+        avatar: student.avatar,
         score: student.score,
         totalTimeMs: student.totalTimeMs,
         answeredQuestions: student.answeredQuestions,
@@ -747,12 +907,20 @@ export class CreateSocket
 
     if (!state) return;
 
-    await this.redisService.setObject(this.testStateKey(roomId), {
-      ...state,
-      status: "finished",
-      questionStartedAt: null,
-      questionEndsAt: null,
-    });
+    const meta = await this.redisService.getObject<RoomMeta>(
+      this.roomMetaKey(roomId),
+    );
+
+    await this.redisService.setObject(
+      this.testStateKey(roomId),
+      {
+        ...state,
+        status: "finished",
+        questionStartedAt: null,
+        questionEndsAt: null,
+      },
+      ROOM_TTL_SECONDS,
+    );
 
     const leaderboard = await this.getLeaderboard(roomId);
 
@@ -760,6 +928,30 @@ export class CreateSocket
       message: "The live test has finished!",
       leaderboard,
     });
+
+    // The code can no longer be used to join a finished quiz.
+    if (meta) {
+      await this.redisService.delete(this.roomCodeKey(meta.code));
+    }
+
+    // Backstop: if the server restarts before the timer below fires,
+    // Redis itself removes the room shortly after the grace period.
+    const graceSeconds = Math.ceil(FINISHED_GRACE_MS / 1000) + 60;
+    await this.redisService.expireByPattern(
+      this.roomPattern(roomId),
+      graceSeconds,
+    );
+
+    // Explicit cleanup once students have had time to read the results.
+    const existing = this.cleanupTimers.get(roomId);
+    if (existing) clearTimeout(existing);
+
+    this.cleanupTimers.set(
+      roomId,
+      setTimeout(() => {
+        void this.destroyRoom(roomId, meta?.code);
+      }, FINISHED_GRACE_MS),
+    );
   }
 
   // -----------------------------------------
@@ -772,12 +964,10 @@ export class CreateSocket
         this.roomMetaKey(roomId),
       );
 
+      // Room already destroyed.
       if (!meta) return;
 
-      await this.redisService.hDel(
-        this.roomUsersKey(roomId),
-        client.id,
-      );
+      await this.redisService.hDel(this.roomUsersKey(roomId), client.id);
 
       const students = await this.getRoomStudents(roomId);
       const leaderboard = await this.getLeaderboard(roomId);
@@ -790,6 +980,18 @@ export class CreateSocket
 
       this.server.to(meta.teacherSocketId).emit("room-users", students);
       this.server.to(roomId).emit("leaderboard-updated", leaderboard);
+
+      // Quiz is over and the last student just left: nothing is left to
+      // show anyone, so clear the room now instead of waiting.
+      if (students.length === 0) {
+        const state = await this.redisService.getObject<TestState>(
+          this.testStateKey(roomId),
+        );
+
+        if (state?.status === "finished") {
+          await this.destroyRoom(roomId, meta.code);
+        }
+      }
     } catch (error) {
       console.error("Remove student error:", error);
     }
@@ -807,22 +1009,20 @@ export class CreateSocket
 
       if (!meta || meta.teacherSocketId !== client.id) return;
 
-      const timer = this.questionTimers.get(roomId);
-      if (timer) clearTimeout(timer);
-      this.questionTimers.delete(roomId);
+      const state = await this.redisService.getObject<TestState>(
+        this.testStateKey(roomId),
+      );
 
-      this.server.to(roomId).emit("room-ended", {
-        message: "The teacher disconnected. This room has been closed.",
-        roomId,
-      });
+      // If the quiz already finished, students are looking at their final
+      // results. Don't kick them to "Room Closed", just clean up.
+      if (state?.status !== "finished") {
+        this.server.to(roomId).emit("room-ended", {
+          message: "The teacher disconnected. This room has been closed.",
+          roomId,
+        });
+      }
 
-      await this.redisService.delete(this.roomCodeKey(meta.code));
-      await this.redisService.delete(this.roomMetaKey(roomId));
-      await this.redisService.delete(this.roomUsersKey(roomId));
-      await this.redisService.delete(this.quizKey(roomId));
-      await this.redisService.delete(this.testStateKey(roomId));
-
-      console.log("Live quiz room deleted:", roomId);
+      await this.destroyRoom(roomId, meta.code);
     } catch (error) {
       console.error("End teacher room error:", error);
     }

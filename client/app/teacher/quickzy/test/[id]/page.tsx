@@ -4,14 +4,15 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { useSocket } from "@/context/SocketContext";
+import { AnimatedNumber, Confetti } from "@/components/quiz/QuizMotion";
 import {
-  AnimatedNumber,
-  Confetti,
-  CountdownRing,
-  Leaderboard,
-  Podium,
-  type LeaderboardEntry,
-} from "@/components/quiz/QuizMotion";
+  AvatarBadge,
+  AvatarLeaderboard,
+  AvatarPodium,
+  QuizTimer,
+  useServerCountdown,
+  type RankedEntry,
+} from "@/components/quiz/QuizExtras";
 
 const API_URL = "/server/quickzy";
 
@@ -34,6 +35,7 @@ interface Student {
   socketId: string;
   username: string;
   email: string;
+  avatar?: string;
   score: number;
   totalTimeMs: number;
   answeredQuestions: number;
@@ -51,6 +53,7 @@ interface LiveQuestion {
   durationSeconds: number;
   startedAt: number;
   endsAt: number;
+  serverNow?: number;
 }
 
 const optionContainer = {
@@ -60,7 +63,11 @@ const optionContainer = {
 
 const optionItem = {
   hidden: { opacity: 0, y: 16 },
-  show: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 300, damping: 24 } },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: { type: "spring" as const, stiffness: 300, damping: 24 },
+  },
 };
 
 export default function TeacherLiveQuizPage() {
@@ -78,10 +85,9 @@ export default function TeacherLiveQuizPage() {
   const [copied, setCopied] = useState(false);
 
   const [students, setStudents] = useState<Student[]>([]);
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [leaderboard, setLeaderboard] = useState<RankedEntry[]>([]);
 
   const [durationSeconds, setDurationSeconds] = useState(20);
-  const [remainingSeconds, setRemainingSeconds] = useState(0);
 
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [isTestStarted, setIsTestStarted] = useState(false);
@@ -89,11 +95,17 @@ export default function TeacherLiveQuizPage() {
   const [isTestFinished, setIsTestFinished] = useState(false);
 
   const [liveQuestion, setLiveQuestion] = useState<LiveQuestion | null>(null);
-  const [correctOptionIndex, setCorrectOptionIndex] = useState<number | null>(
-    null,
-  );
+  const [serverOffset, setServerOffset] = useState(0);
+  const [correctOptionIndex, setCorrectOptionIndex] = useState<number | null>(null);
   const [answeredCount, setAnsweredCount] = useState(0);
+  const [answeredIds, setAnsweredIds] = useState<string[]>([]);
   const [testError, setTestError] = useState("");
+
+  const remainingSeconds = useServerCountdown(
+    liveQuestion?.endsAt ?? null,
+    serverOffset,
+    !!liveQuestion && !isQuestionEnded && !isTestFinished,
+  );
 
   // --------------------------------
   // FETCH QUIZ
@@ -159,40 +171,44 @@ export default function TeacherLiveQuizPage() {
       setIsCreatingRoom(false);
     };
 
-    const handleRoomUsers = (users: Student[]) => {
-      setStudents(users);
-    };
+    const handleRoomUsers = (users: Student[]) => setStudents(users);
 
     const handleQuestionStarted = (data: LiveQuestion) => {
+      if (typeof data.serverNow === "number") {
+        setServerOffset(data.serverNow - Date.now());
+      }
       setLiveQuestion(data);
       setIsTestStarted(true);
       setIsQuestionEnded(false);
       setIsTestFinished(false);
       setCorrectOptionIndex(null);
       setAnsweredCount(0);
+      setAnsweredIds([]);
       setTestError("");
     };
 
     const handleQuestionEnded = (data: {
       questionIndex: number;
       correctOptionIndex: number;
-      leaderboard: LeaderboardEntry[];
+      leaderboard: RankedEntry[];
     }) => {
       setIsQuestionEnded(true);
       setCorrectOptionIndex(data.correctOptionIndex);
       setLeaderboard(data.leaderboard);
-      setRemainingSeconds(0);
     };
 
-    const handleLeaderboard = (data: LeaderboardEntry[]) => {
-      setLeaderboard(data);
-    };
+    const handleLeaderboard = (data: RankedEntry[]) => setLeaderboard(data);
 
-    const handleAnswerReceived = (data: { answeredCount: number }) => {
+    const handleAnswerReceived = (data: { socketId?: string; answeredCount: number }) => {
       setAnsweredCount(data.answeredCount);
+      if (data.socketId) {
+        setAnsweredIds((prev) =>
+          prev.includes(data.socketId!) ? prev : [...prev, data.socketId!],
+        );
+      }
     };
 
-    const handleTestFinished = (data: { leaderboard: LeaderboardEntry[] }) => {
+    const handleTestFinished = (data: { leaderboard: RankedEntry[] }) => {
       setIsTestFinished(true);
       setIsQuestionEnded(true);
       setLeaderboard(data.leaderboard);
@@ -226,29 +242,6 @@ export default function TeacherLiveQuizPage() {
   }, [socket]);
 
   // --------------------------------
-  // QUESTION COUNTDOWN
-  // --------------------------------
-
-  useEffect(() => {
-    if (!liveQuestion || isQuestionEnded || isTestFinished) return;
-
-    const updateTimer = () => {
-      const remaining = Math.max(
-        0,
-        Math.ceil((liveQuestion.endsAt - Date.now()) / 1000),
-      );
-
-      setRemainingSeconds(remaining);
-    };
-
-    updateTimer();
-
-    const interval = setInterval(updateTimer, 250);
-
-    return () => clearInterval(interval);
-  }, [liveQuestion, isQuestionEnded, isTestFinished]);
-
-  // --------------------------------
   // ACTIONS
   // --------------------------------
 
@@ -278,14 +271,17 @@ export default function TeacherLiveQuizPage() {
 
   const startTest = () => {
     if (!socket || !roomId) return;
-
     setTestError("");
     socket.emit("start-test", { durationSeconds });
   };
 
+  const endQuestionNow = () => {
+    if (!socket || !roomId) return;
+    socket.emit("end-question");
+  };
+
   const nextQuestion = () => {
     if (!socket || !roomId) return;
-
     setTestError("");
     socket.emit("next-question");
   };
@@ -341,13 +337,12 @@ export default function TeacherLiveQuizPage() {
   if (!quickzy) return null;
 
   const answeredPct =
-    students.length > 0
-      ? Math.min(100, (answeredCount / students.length) * 100)
-      : 0;
+    students.length > 0 ? Math.min(100, (answeredCount / students.length) * 100) : 0;
 
   const isLastQuestion =
-    liveQuestion !== null &&
-    liveQuestion.questionIndex + 1 === liveQuestion.totalQuestions;
+    liveQuestion !== null && liveQuestion.questionIndex + 1 === liveQuestion.totalQuestions;
+
+  const isRunning = liveQuestion !== null && !isQuestionEnded && !isTestFinished;
 
   return (
     <MotionConfig reducedMotion="user">
@@ -368,15 +363,11 @@ export default function TeacherLiveQuizPage() {
 
           <span
             className={`flex items-center gap-2 rounded-full px-4 py-2 text-sm ${
-              isConnected
-                ? "bg-green-100 text-green-700"
-                : "bg-red-100 text-red-700"
+              isConnected ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
             }`}
           >
             <motion.span
-              className={`h-2.5 w-2.5 rounded-full ${
-                isConnected ? "bg-green-500" : "bg-red-500"
-              }`}
+              className={`h-2.5 w-2.5 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`}
               animate={isConnected ? { scale: [1, 1.6, 1], opacity: [1, 0.5, 1] } : {}}
               transition={{ duration: 1.8, repeat: Infinity }}
             />
@@ -408,9 +399,7 @@ export default function TeacherLiveQuizPage() {
               exit={{ opacity: 0, scale: 0.96 }}
               className="rounded-2xl border bg-white p-6 shadow-sm"
             >
-              <p className="mb-4 text-gray-600">
-                Create a live room for students to join.
-              </p>
+              <p className="mb-4 text-gray-600">Create a live room for students to join.</p>
 
               <motion.button
                 whileHover={{ scale: 1.03 }}
@@ -497,21 +486,18 @@ export default function TeacherLiveQuizPage() {
                 >
                   <h2 className="mb-3 text-xl font-bold">Contest settings</h2>
 
-                  <label className="mb-2 block text-sm font-medium">
-                    Time per question
-                  </label>
+                  <label className="mb-2 block text-sm font-medium">Time per question</label>
 
                   <select
                     value={durationSeconds}
                     onChange={(e) => setDurationSeconds(Number(e.target.value))}
                     className="mb-5 rounded-lg border p-3"
                   >
-                    <option value={10}>10 seconds</option>
-                    <option value={15}>15 seconds</option>
-                    <option value={20}>20 seconds</option>
-                    <option value={30}>30 seconds</option>
-                    <option value={45}>45 seconds</option>
-                    <option value={60}>60 seconds</option>
+                    {[10, 15, 20, 30, 45, 60].map((s) => (
+                      <option key={s} value={s}>
+                        {s} seconds
+                      </option>
+                    ))}
                   </select>
 
                   <p className="mb-4 text-gray-500">
@@ -523,7 +509,12 @@ export default function TeacherLiveQuizPage() {
                     whileTap={students.length ? { scale: 0.97 } : undefined}
                     animate={
                       students.length > 0 && isConnected
-                        ? { boxShadow: ["0 0 0 0 rgba(22,163,74,0.5)", "0 0 0 14px rgba(22,163,74,0)"] }
+                        ? {
+                            boxShadow: [
+                              "0 0 0 0 rgba(22,163,74,0.5)",
+                              "0 0 0 14px rgba(22,163,74,0)",
+                            ],
+                          }
                         : { boxShadow: "0 0 0 0 rgba(22,163,74,0)" }
                     }
                     transition={
@@ -560,20 +551,20 @@ export default function TeacherLiveQuizPage() {
                 >
                   <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                     <span className="font-semibold">
-                      Question {liveQuestion.questionIndex + 1} of{" "}
-                      {liveQuestion.totalQuestions}
+                      Question {liveQuestion.questionIndex + 1} of {liveQuestion.totalQuestions}
                     </span>
 
-                    <CountdownRing
+                    <QuizTimer
                       remaining={remainingSeconds}
                       total={liveQuestion.durationSeconds}
+                      endsAt={liveQuestion.endsAt}
+                      offsetMs={serverOffset}
                       ended={isQuestionEnded}
+                      size={104}
                     />
                   </div>
 
-                  <h2 className="mb-5 text-2xl font-bold">
-                    {liveQuestion.question.question}
-                  </h2>
+                  <h2 className="mb-5 text-2xl font-bold">{liveQuestion.question.question}</h2>
 
                   <motion.div
                     variants={optionContainer}
@@ -582,8 +573,7 @@ export default function TeacherLiveQuizPage() {
                     className="grid gap-3 sm:grid-cols-2"
                   >
                     {liveQuestion.question.options.map((option, index) => {
-                      const isCorrect =
-                        isQuestionEnded && correctOptionIndex === index;
+                      const isCorrect = isQuestionEnded && correctOptionIndex === index;
                       const isDimmed = isQuestionEnded && !isCorrect;
 
                       return (
@@ -625,8 +615,7 @@ export default function TeacherLiveQuizPage() {
                     <div className="mb-1 flex justify-between text-sm text-gray-500">
                       <span>Marks: {liveQuestion.question.marks}</span>
                       <span>
-                        Answers received:{" "}
-                        <AnimatedNumber value={answeredCount} />
+                        Answers received: <AnimatedNumber value={answeredCount} />
                         {students.length > 0 && ` / ${students.length}`}
                       </span>
                     </div>
@@ -640,22 +629,41 @@ export default function TeacherLiveQuizPage() {
                     </div>
                   </div>
 
-                  <AnimatePresence>
-                    {isQuestionEnded && (
-                      <motion.button
-                        key="next"
-                        initial={{ opacity: 0, y: 16, scale: 0.9 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0 }}
-                        whileHover={{ scale: 1.03 }}
-                        whileTap={{ scale: 0.97 }}
-                        onClick={nextQuestion}
-                        className="mt-6 rounded-lg bg-indigo-600 px-6 py-3 font-semibold text-white"
-                      >
-                        {isLastQuestion ? "Show Final Results" : "Next Question"}
-                      </motion.button>
-                    )}
-                  </AnimatePresence>
+                  <div className="mt-6 flex flex-wrap gap-3">
+                    <AnimatePresence>
+                      {isRunning && (
+                        <motion.button
+                          key="end"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          whileHover={{ scale: 1.03 }}
+                          whileTap={{ scale: 0.97 }}
+                          onClick={endQuestionNow}
+                          className="rounded-lg border border-red-300 px-5 py-3 font-semibold text-red-600"
+                        >
+                          End question now
+                        </motion.button>
+                      )}
+                    </AnimatePresence>
+
+                    <AnimatePresence>
+                      {isQuestionEnded && (
+                        <motion.button
+                          key="next"
+                          initial={{ opacity: 0, y: 16, scale: 0.9 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0 }}
+                          whileHover={{ scale: 1.03 }}
+                          whileTap={{ scale: 0.97 }}
+                          onClick={nextQuestion}
+                          className="rounded-lg bg-indigo-600 px-6 py-3 font-semibold text-white"
+                        >
+                          {isLastQuestion ? "Show Final Results" : "Next Question"}
+                        </motion.button>
+                      )}
+                    </AnimatePresence>
+                  </div>
                 </motion.section>
               )}
             </AnimatePresence>
@@ -696,27 +704,44 @@ export default function TeacherLiveQuizPage() {
                   ))}
                 </div>
               ) : (
-                <ul className="space-y-3">
+                <ul className="grid gap-3 sm:grid-cols-2">
                   <AnimatePresence initial={false} mode="popLayout">
-                    {students.map((student) => (
-                      <motion.li
-                        key={student.socketId}
-                        layout
-                        initial={{ opacity: 0, scale: 0.8, x: -30 }}
-                        animate={{ opacity: 1, scale: 1, x: 0 }}
-                        exit={{ opacity: 0, scale: 0.8, x: 30 }}
-                        transition={{ type: "spring", stiffness: 350, damping: 26 }}
-                        className="flex items-center gap-3 rounded-xl border p-3"
-                      >
-                        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100 font-bold text-indigo-700">
-                          {student.username.charAt(0).toUpperCase()}
-                        </span>
-                        <div>
-                          <p className="font-semibold">{student.username}</p>
-                          <p className="text-sm text-gray-500">{student.email}</p>
-                        </div>
-                      </motion.li>
-                    ))}
+                    {students.map((student) => {
+                      const answered = isRunning && answeredIds.includes(student.socketId);
+                      return (
+                        <motion.li
+                          key={student.socketId}
+                          layout
+                          initial={{ opacity: 0, scale: 0.8, x: -30 }}
+                          animate={{ opacity: 1, scale: 1, x: 0 }}
+                          exit={{ opacity: 0, scale: 0.8, x: 30 }}
+                          transition={{ type: "spring", stiffness: 350, damping: 26 }}
+                          className="flex items-center gap-3 rounded-xl border p-3"
+                        >
+                          <AvatarBadge
+                            avatar={student.avatar}
+                            name={student.username}
+                            size={44}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-semibold">{student.username}</p>
+                            <p className="truncate text-sm text-gray-500">{student.email}</p>
+                          </div>
+                          <AnimatePresence>
+                            {answered && (
+                              <motion.span
+                                initial={{ scale: 0 }}
+                                animate={{ scale: 1 }}
+                                exit={{ scale: 0 }}
+                                className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700"
+                              >
+                                ✓ Answered
+                              </motion.span>
+                            )}
+                          </AnimatePresence>
+                        </motion.li>
+                      );
+                    })}
                   </AnimatePresence>
                 </ul>
               )}
@@ -732,16 +757,16 @@ export default function TeacherLiveQuizPage() {
                   className="rounded-2xl border bg-white p-6 shadow-sm"
                 >
                   <h2 className="mb-4 text-2xl font-bold">
-                    {isTestFinished ? "Final Leaderboard" : "Live Leaderboard"}
+                    {isTestFinished ? "Final Leaderboard" : "Leaderboard"}
                   </h2>
 
-                  {isTestFinished && <Podium entries={leaderboard} />}
+                  {isTestFinished && <AvatarPodium entries={leaderboard} />}
 
                   {leaderboard.length === 0 ? (
                     <p className="text-gray-500">No scores yet.</p>
                   ) : (
                     <div className="mt-4">
-                      <Leaderboard entries={leaderboard} showTime />
+                      <AvatarLeaderboard entries={leaderboard} showTime />
                     </div>
                   )}
                 </motion.section>

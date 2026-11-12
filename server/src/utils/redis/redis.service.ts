@@ -1,9 +1,4 @@
-
-import {
-  Inject,
-  Injectable,
-  OnModuleDestroy,
-} from "@nestjs/common";
+import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
 
 import type { Redis as RedisClient } from "ioredis";
 import { REDIS_CLIENT } from "./redis.constants.js";
@@ -19,11 +14,7 @@ export class RedisService implements OnModuleDestroy {
   // STRING OPERATIONS
   // ----------------------------------
 
-  async set(
-    key: string,
-    value: string,
-    ttl?: number,
-  ): Promise<void> {
+  async set(key: string, value: string, ttl?: number): Promise<void> {
     if (ttl) {
       await this.redis.set(key, value, "EX", ttl);
       return;
@@ -48,11 +39,7 @@ export class RedisService implements OnModuleDestroy {
   // OBJECT OPERATIONS
   // ----------------------------------
 
-  async setObject(
-    key: string,
-    value: object,
-    ttl?: number,
-  ): Promise<void> {
+  async setObject(key: string, value: object, ttl?: number): Promise<void> {
     await this.set(key, JSON.stringify(value), ttl);
   }
 
@@ -68,38 +55,23 @@ export class RedisService implements OnModuleDestroy {
   // HASH OPERATIONS
   // ----------------------------------
 
-  async hSet(
-    key: string,
-    field: string,
-    value: string,
-  ): Promise<number> {
+  async hSet(key: string, field: string, value: string): Promise<number> {
     return this.redis.hset(key, field, value);
   }
 
-  async hGet(
-    key: string,
-    field: string,
-  ): Promise<string | null> {
+  async hGet(key: string, field: string): Promise<string | null> {
     return this.redis.hget(key, field);
   }
 
-  async hGetAll(
-    key: string,
-  ): Promise<Record<string, string>> {
+  async hGetAll(key: string): Promise<Record<string, string>> {
     return this.redis.hgetall(key);
   }
 
-  async hDel(
-    key: string,
-    field: string,
-  ): Promise<number> {
+  async hDel(key: string, field: string): Promise<number> {
     return this.redis.hdel(key, field);
   }
 
-  async hExists(
-    key: string,
-    field: string,
-  ): Promise<boolean> {
+  async hExists(key: string, field: string): Promise<boolean> {
     return (await this.redis.hexists(key, field)) === 1;
   }
 
@@ -117,6 +89,46 @@ export class RedisService implements OnModuleDestroy {
 
   async decrement(key: string): Promise<number> {
     return this.redis.decr(key);
+  }
+
+  // ----------------------------------
+  // EXPIRY + PATTERN OPERATIONS
+  // ----------------------------------
+
+  async expire(key: string, seconds: number): Promise<void> {
+    await this.redis.expire(key, seconds);
+  }
+
+  // Non-blocking SCAN (never use KEYS in production).
+  async scanKeys(pattern: string): Promise<string[]> {
+    const found: string[] = [];
+    let cursor = "0";
+
+    do {
+      const [next, keys] = await this.redis.scan(
+        cursor,
+        "MATCH",
+        pattern,
+        "COUNT",
+        100,
+      );
+      cursor = next;
+      found.push(...keys);
+    } while (cursor !== "0");
+
+    return found;
+  }
+
+  async deleteByPattern(pattern: string): Promise<number> {
+    const keys = await this.scanKeys(pattern);
+    if (keys.length === 0) return 0;
+
+    return this.redis.del(...keys);
+  }
+
+  async expireByPattern(pattern: string, seconds: number): Promise<void> {
+    const keys = await this.scanKeys(pattern);
+    await Promise.all(keys.map((k) => this.redis.expire(k, seconds)));
   }
 
   // ----------------------------------

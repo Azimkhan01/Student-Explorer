@@ -5,14 +5,17 @@ import { useAppSelector } from "@/redux/hooks";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
+import { AnimatedNumber, Confetti } from "@/components/quiz/QuizMotion";
 import {
-  AnimatedNumber,
-  Confetti,
-  CountdownRing,
-  Leaderboard,
-  Podium,
-  type LeaderboardEntry,
-} from "@/components/quiz/QuizMotion";
+  AVATARS,
+  AvatarBadge,
+  AvatarLeaderboard,
+  AvatarPicker,
+  AvatarPodium,
+  QuizTimer,
+  useServerCountdown,
+  type RankedEntry,
+} from "@/components/quiz/QuizExtras";
 
 interface LiveQuestion {
   question: {
@@ -26,6 +29,15 @@ interface LiveQuestion {
   durationSeconds: number;
   startedAt: number;
   endsAt: number;
+  serverNow?: number;
+}
+
+interface AnswerResult {
+  answered: boolean;
+  isCorrect: boolean;
+  earnedMarks: number;
+  selectedOptionIndex: number | null;
+  responseTimeMs: number | null;
 }
 
 const optionContainer = {
@@ -35,7 +47,18 @@ const optionContainer = {
 
 const optionItem = {
   hidden: { opacity: 0, x: -24 },
-  show: { opacity: 1, x: 0, transition: { type: "spring" as const, stiffness: 300, damping: 24 } },
+  show: {
+    opacity: 1,
+    x: 0,
+    transition: { type: "spring" as const, stiffness: 300, damping: 24 },
+  },
+};
+
+const toneClass = {
+  info: "bg-indigo-50 text-indigo-700",
+  success: "bg-green-50 text-green-700",
+  error: "bg-red-50 text-red-700",
+  warn: "bg-amber-50 text-amber-700",
 };
 
 export default function StudentLiveQuizPage() {
@@ -47,29 +70,46 @@ export default function StudentLiveQuizPage() {
 
   const { socket, isConnected } = useSocket();
 
-  const [isJoining, setIsJoining] = useState(true);
+  const [avatar, setAvatar] = useState(AVATARS[0]);
+  const [confirmed, setConfirmed] = useState(false);
+
+  const [isJoining, setIsJoining] = useState(false);
   const [isJoined, setIsJoined] = useState(false);
   const [pageError, setPageError] = useState("");
-
-  const [roomId, setRoomId] = useState<string | null>(null);
   const [roomEnded, setRoomEnded] = useState(false);
 
   const [liveQuestion, setLiveQuestion] = useState<LiveQuestion | null>(null);
+  const [serverOffset, setServerOffset] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
-  const [correctOptionIndex, setCorrectOptionIndex] = useState<number | null>(
-    null,
-  );
+  const [correctOptionIndex, setCorrectOptionIndex] = useState<number | null>(null);
 
-  const [remainingSeconds, setRemainingSeconds] = useState(0);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [questionEnded, setQuestionEnded] = useState(false);
-
   const [answerFeedback, setAnswerFeedback] = useState("");
-  const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
-  const [earnedMarks, setEarnedMarks] = useState(0);
+  const [result, setResult] = useState<AnswerResult | null>(null);
 
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [leaderboard, setLeaderboard] = useState<RankedEntry[]>([]);
   const [testFinished, setTestFinished] = useState(false);
+
+  const remainingSeconds = useServerCountdown(
+    liveQuestion?.endsAt ?? null,
+    serverOffset,
+    !!liveQuestion && !questionEnded && !testFinished,
+  );
+
+  // Restore a saved avatar, or pick a random one.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("quiz-avatar");
+      if (saved && AVATARS.includes(saved)) {
+        setAvatar(saved);
+        return;
+      }
+    } catch {
+      /* storage blocked */
+    }
+    setAvatar(AVATARS[Math.floor(Math.random() * AVATARS.length)]);
+  }, []);
 
   // --------------------------------
   // JOIN ROOM
@@ -97,8 +137,19 @@ export default function StudentLiveQuizPage() {
       code: Number(code),
       email: role.email,
       username: role.username,
+      avatar,
     });
-  }, [socket, code, role?.email, role?.username]);
+  }, [socket, code, role?.email, role?.username, avatar]);
+
+  const confirmJoin = () => {
+    try {
+      localStorage.setItem("quiz-avatar", avatar);
+    } catch {
+      /* ignore */
+    }
+    setIsJoining(true); // avoids a one-frame flash of the waiting screen
+    setConfirmed(true);
+  };
 
   // --------------------------------
   // SOCKET EVENTS
@@ -107,8 +158,7 @@ export default function StudentLiveQuizPage() {
   useEffect(() => {
     if (!socket) return;
 
-    const handleRoomJoined = (data: { roomId: string; code: number }) => {
-      setRoomId(data.roomId);
+    const handleRoomJoined = () => {
       setIsJoined(true);
       setIsJoining(false);
       setPageError("");
@@ -121,47 +171,48 @@ export default function StudentLiveQuizPage() {
     };
 
     const handleQuestionStarted = (data: LiveQuestion) => {
+      if (typeof data.serverNow === "number") {
+        setServerOffset(data.serverNow - Date.now());
+      }
       setLiveQuestion(data);
       setSelectedOption(null);
       setCorrectOptionIndex(null);
       setHasSubmitted(false);
       setQuestionEnded(false);
       setAnswerFeedback("");
-      setIsCorrect(null);
-      setEarnedMarks(0);
+      setResult(null);
     };
 
-    const handleAnswerResult = (data: {
-      isCorrect: boolean;
-      earnedMarks: number;
-      responseTimeMs: number;
-      message: string;
-    }) => {
+    // Server confirms the answer was stored. Correctness is NOT revealed yet.
+    const handleAnswerLocked = () => {
       setHasSubmitted(true);
-      setIsCorrect(data.isCorrect);
-      setEarnedMarks(data.earnedMarks);
-      setAnswerFeedback(
-        `${data.message} Response time: ${(data.responseTimeMs / 1000).toFixed(2)} seconds.`,
-      );
+      setAnswerFeedback("");
     };
 
-    const handleAnswerError = (data: { message?: string }) => {
+    // Arrives only after the timer has ended.
+    const handleAnswerResult = (data: AnswerResult) => {
+      setResult(data);
+    };
+
+    const handleAnswerError = (data: { code?: string; message?: string }) => {
+      setHasSubmitted(data?.code === "ALREADY_ANSWERED");
       setAnswerFeedback(data?.message || "Unable to submit answer.");
     };
 
-    // The server already sends correctOptionIndex to the whole room.
-    const handleQuestionEnded = (data: { correctOptionIndex?: number }) => {
+    const handleQuestionEnded = (data: {
+      correctOptionIndex?: number;
+      leaderboard?: RankedEntry[];
+    }) => {
       setQuestionEnded(true);
       if (typeof data?.correctOptionIndex === "number") {
         setCorrectOptionIndex(data.correctOptionIndex);
       }
+      if (data?.leaderboard) setLeaderboard(data.leaderboard);
     };
 
-    const handleLeaderboard = (data: LeaderboardEntry[]) => {
-      setLeaderboard(data);
-    };
+    const handleLeaderboard = (data: RankedEntry[]) => setLeaderboard(data);
 
-    const handleTestFinished = (data: { leaderboard: LeaderboardEntry[] }) => {
+    const handleTestFinished = (data: { leaderboard: RankedEntry[] }) => {
       setLeaderboard(data.leaderboard);
       setTestFinished(true);
       setQuestionEnded(true);
@@ -175,6 +226,7 @@ export default function StudentLiveQuizPage() {
     socket.on("room-joined", handleRoomJoined);
     socket.on("room-error", handleRoomError);
     socket.on("question-started", handleQuestionStarted);
+    socket.on("answer-locked", handleAnswerLocked);
     socket.on("answer-result", handleAnswerResult);
     socket.on("answer-error", handleAnswerError);
     socket.on("question-ended", handleQuestionEnded);
@@ -182,17 +234,14 @@ export default function StudentLiveQuizPage() {
     socket.on("test-finished", handleTestFinished);
     socket.on("room-ended", handleRoomEnded);
 
-    if (isConnected) {
-      joinRoom();
-    } else {
-      setIsJoining(true);
-      setIsJoined(false);
-    }
+    // Join (or re-join after a reconnect) once the avatar is confirmed.
+    if (isConnected && confirmed) joinRoom();
 
     return () => {
       socket.off("room-joined", handleRoomJoined);
       socket.off("room-error", handleRoomError);
       socket.off("question-started", handleQuestionStarted);
+      socket.off("answer-locked", handleAnswerLocked);
       socket.off("answer-result", handleAnswerResult);
       socket.off("answer-error", handleAnswerError);
       socket.off("question-ended", handleQuestionEnded);
@@ -200,30 +249,7 @@ export default function StudentLiveQuizPage() {
       socket.off("test-finished", handleTestFinished);
       socket.off("room-ended", handleRoomEnded);
     };
-  }, [socket, isConnected, joinRoom]);
-
-  // --------------------------------
-  // QUESTION TIMER
-  // --------------------------------
-
-  useEffect(() => {
-    if (!liveQuestion || questionEnded || testFinished) return;
-
-    const updateTimer = () => {
-      const remaining = Math.max(
-        0,
-        Math.ceil((liveQuestion.endsAt - Date.now()) / 1000),
-      );
-
-      setRemainingSeconds(remaining);
-    };
-
-    updateTimer();
-
-    const interval = setInterval(updateTimer, 250);
-
-    return () => clearInterval(interval);
-  }, [liveQuestion, questionEnded, testFinished]);
+  }, [socket, isConnected, confirmed, joinRoom]);
 
   // --------------------------------
   // SUBMIT ANSWER
@@ -237,12 +263,10 @@ export default function StudentLiveQuizPage() {
       return;
     }
 
-    if (hasSubmitted || questionEnded || remainingSeconds <= 0) {
-      return;
-    }
+    if (hasSubmitted || questionEnded || remainingSeconds <= 0) return;
 
     setHasSubmitted(true);
-    setAnswerFeedback("Submitting your answer...");
+    setAnswerFeedback("");
 
     socket.emit("submit-answer", {
       questionIndex: liveQuestion.questionIndex,
@@ -250,7 +274,6 @@ export default function StudentLiveQuizPage() {
     });
   };
 
-  // Prefer socket id (usernames can repeat); fall back to username.
   const me =
     leaderboard.find((s) => s.socketId === socket?.id) ??
     leaderboard.find((s) => s.username === role?.username);
@@ -271,7 +294,6 @@ export default function StudentLiveQuizPage() {
           >
             ✕
           </motion.div>
-
           <motion.h1
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -280,7 +302,6 @@ export default function StudentLiveQuizPage() {
           >
             Room Closed
           </motion.h1>
-
           <motion.p
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -289,7 +310,6 @@ export default function StudentLiveQuizPage() {
           >
             {pageError}
           </motion.p>
-
           <motion.button
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -307,10 +327,10 @@ export default function StudentLiveQuizPage() {
   }
 
   // --------------------------------
-  // CONNECTION / JOINING
+  // CONNECTING
   // --------------------------------
 
-  if (!isConnected || isJoining) {
+  if (!isConnected) {
     return (
       <main className="flex min-h-screen items-center justify-center">
         <div className="text-center">
@@ -319,13 +339,70 @@ export default function StudentLiveQuizPage() {
             animate={{ rotate: 360 }}
             transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
           />
-          <motion.p
-            key={isConnected ? "joining" : "connecting"}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
+          <p>Connecting to server...</p>
+        </div>
+      </main>
+    );
+  }
+
+  // --------------------------------
+  // LOBBY: PICK AVATAR
+  // --------------------------------
+
+  if (!confirmed) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <main className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center gap-6 p-5">
+          <div className="text-center">
+            <motion.div
+              key={avatar}
+              initial={{ scale: 0.4, rotate: -20 }}
+              animate={{ scale: 1, rotate: 0 }}
+              transition={{ type: "spring", stiffness: 400, damping: 14 }}
+              className="mx-auto flex h-28 w-28 items-center justify-center rounded-full bg-indigo-100 text-6xl shadow-inner"
+            >
+              {avatar}
+            </motion.div>
+            <h1 className="mt-4 text-2xl font-bold">Join live quiz</h1>
+            <p className="text-gray-500">
+              Room <span className="font-bold tracking-widest">{code}</span>
+              {role?.username && (
+                <>
+                  {" "}
+                  · Playing as <span className="font-semibold">{role.username}</span>
+                </>
+              )}
+            </p>
+          </div>
+
+          <section className="w-full rounded-2xl border bg-white p-5 shadow-sm">
+            <h2 className="mb-3 font-bold">Pick your avatar</h2>
+            <AvatarPicker value={avatar} onChange={setAvatar} />
+          </section>
+
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={confirmJoin}
+            className="w-full rounded-lg bg-indigo-600 px-5 py-3 font-semibold text-white"
           >
-            {isConnected ? "Joining live quiz..." : "Connecting to server..."}
-          </motion.p>
+            Join Room
+          </motion.button>
+        </main>
+      </MotionConfig>
+    );
+  }
+
+  if (isJoining) {
+    return (
+      <main className="flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <motion.div
+            className="mx-auto mb-4 h-10 w-10 rounded-full border-4 border-indigo-500 border-t-transparent"
+            animate={{ rotate: 360 }}
+            transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
+          />
+          <p>Joining live quiz...</p>
         </div>
       </main>
     );
@@ -339,9 +416,7 @@ export default function StudentLiveQuizPage() {
         className="flex min-h-screen flex-col items-center justify-center gap-4"
       >
         <h1 className="text-xl font-bold text-red-500">Unable to join room</h1>
-
         <p className="text-gray-500">{pageError}</p>
-
         <motion.button
           whileHover={{ scale: 1.04 }}
           whileTap={{ scale: 0.96 }}
@@ -382,9 +457,7 @@ export default function StudentLiveQuizPage() {
               🏆
             </motion.div>
             <h1 className="text-3xl font-bold">Test Completed!</h1>
-            <p className="mt-2 text-gray-500">
-              Here are the final contest results.
-            </p>
+            <p className="mt-2 text-gray-500">Here are the final contest results.</p>
 
             {me && (
               <motion.div
@@ -393,6 +466,9 @@ export default function StudentLiveQuizPage() {
                 transition={{ delay: 0.5, type: "spring", stiffness: 200, damping: 18 }}
                 className="mt-6 rounded-xl bg-indigo-50 p-5"
               >
+                <div className="mb-2 flex justify-center">
+                  <AvatarBadge avatar={me.avatar ?? avatar} name={me.username} size={56} />
+                </div>
                 <p className="text-gray-500">Your final position</p>
                 <p className="text-5xl font-extrabold text-indigo-600">
                   #<AnimatedNumber value={me.rank} />
@@ -406,14 +482,9 @@ export default function StudentLiveQuizPage() {
 
           <section className="rounded-2xl border bg-white p-5 shadow-sm">
             <h2 className="mb-2 text-xl font-bold">Final Leaderboard</h2>
-            <Podium entries={leaderboard} />
+            <AvatarPodium entries={leaderboard} />
             <div className="mt-6">
-              <Leaderboard
-                entries={leaderboard}
-                highlightId={socket?.id}
-                highlightName={role?.username}
-                showTime
-              />
+              <AvatarLeaderboard entries={leaderboard} highlightId={socket?.id} showTime />
             </div>
           </section>
 
@@ -438,7 +509,7 @@ export default function StudentLiveQuizPage() {
     return (
       <MotionConfig reducedMotion="user">
         <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-5">
-          <div className="relative flex h-24 w-24 items-center justify-center">
+          <div className="relative flex h-28 w-28 items-center justify-center">
             {[0, 1].map((i) => (
               <motion.span
                 key={i}
@@ -448,20 +519,14 @@ export default function StudentLiveQuizPage() {
                 transition={{ duration: 2, repeat: Infinity, delay: i, ease: "easeOut" }}
               />
             ))}
-            <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-green-100">
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-                <motion.path
-                  d="M5 13l4 4L19 7"
-                  stroke="#16a34a"
-                  strokeWidth="3"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  initial={{ pathLength: 0 }}
-                  animate={{ pathLength: 1 }}
-                  transition={{ duration: 0.6, delay: 0.2 }}
-                />
-              </svg>
-            </div>
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ type: "spring", stiffness: 300, damping: 14 }}
+              className="relative flex h-24 w-24 items-center justify-center rounded-full bg-green-100 text-5xl"
+            >
+              {avatar}
+            </motion.div>
           </div>
 
           <motion.h1
@@ -470,17 +535,12 @@ export default function StudentLiveQuizPage() {
             transition={{ delay: 0.3 }}
             className="text-2xl font-bold text-green-600"
           >
-            Successfully joined!
+            You&apos;re in{role?.username ? `, ${role.username}` : ""}!
           </motion.h1>
 
-          <motion.p
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.4 }}
-            className="text-gray-500"
-          >
+          <p className="text-gray-500">
             Room code: <span className="font-bold tracking-widest">{code}</span>
-          </motion.p>
+          </p>
 
           <p className="flex items-center gap-2 text-center text-gray-500">
             Waiting for the teacher to start the live test
@@ -508,13 +568,46 @@ export default function StudentLiveQuizPage() {
 
   const locked = hasSubmitted || questionEnded || remainingSeconds <= 0;
 
+  let banner: { tone: keyof typeof toneClass; title: string; detail?: string } | null = null;
+  if (questionEnded && result) {
+    if (!result.answered) {
+      banner = {
+        tone: "warn",
+        title: "Time ran out",
+        detail: "You didn't submit an answer for this question.",
+      };
+    } else if (result.isCorrect) {
+      banner = {
+        tone: "success",
+        title: `Correct! +${result.earnedMarks} marks`,
+        detail:
+          result.responseTimeMs !== null
+            ? `Answered in ${(result.responseTimeMs / 1000).toFixed(2)} seconds.`
+            : undefined,
+      };
+    } else {
+      banner = { tone: "error", title: "Incorrect", detail: "Better luck on the next one." };
+    }
+  } else if (hasSubmitted && !questionEnded) {
+    banner = {
+      tone: "info",
+      title: "Answer locked in 🔒",
+      detail: "Results are revealed when the timer ends.",
+    };
+  } else if (answerFeedback) {
+    banner = { tone: "warn", title: answerFeedback };
+  }
+
   return (
     <MotionConfig reducedMotion="user">
       <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 p-5">
         <header className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-bold">Live Quiz</h1>
-            <p className="text-sm text-gray-500">Room {code}</p>
+          <div className="flex items-center gap-3">
+            <AvatarBadge avatar={avatar} name={role?.username ?? "?"} size={44} />
+            <div>
+              <h1 className="text-xl font-bold">Live Quiz</h1>
+              <p className="text-sm text-gray-500">Room {code}</p>
+            </div>
           </div>
 
           <div className="flex items-center gap-4">
@@ -535,11 +628,13 @@ export default function StudentLiveQuizPage() {
               </div>
             )}
 
-            <CountdownRing
+            <QuizTimer
               remaining={remainingSeconds}
               total={liveQuestion.durationSeconds}
+              endsAt={liveQuestion.endsAt}
+              offsetMs={serverOffset}
               ended={questionEnded}
-              size={72}
+              size={84}
             />
           </div>
         </header>
@@ -555,8 +650,7 @@ export default function StudentLiveQuizPage() {
           >
             <div className="mb-3 flex items-center justify-between text-sm text-gray-500">
               <span>
-                Question {liveQuestion.questionIndex + 1} of{" "}
-                {liveQuestion.totalQuestions}
+                Question {liveQuestion.questionIndex + 1} of {liveQuestion.totalQuestions}
               </span>
               <span>{liveQuestion.question.marks} marks</span>
             </div>
@@ -572,9 +666,7 @@ export default function StudentLiveQuizPage() {
               />
             </div>
 
-            <h2 className="mb-6 text-2xl font-bold">
-              {liveQuestion.question.question}
-            </h2>
+            <h2 className="mb-6 text-2xl font-bold">{liveQuestion.question.question}</h2>
 
             <motion.div
               variants={optionContainer}
@@ -584,8 +676,7 @@ export default function StudentLiveQuizPage() {
             >
               {liveQuestion.question.options.map((option, index) => {
                 const isSelected = selectedOption === index;
-                const showCorrect =
-                  questionEnded && correctOptionIndex === index;
+                const showCorrect = questionEnded && correctOptionIndex === index;
                 const showWrong =
                   questionEnded &&
                   isSelected &&
@@ -621,9 +712,7 @@ export default function StudentLiveQuizPage() {
                       transition={{ duration: 0.45 }}
                       className={`w-full rounded-xl border p-4 text-left disabled:cursor-not-allowed ${style}`}
                     >
-                      <span className="mr-3 font-bold">
-                        {String.fromCharCode(65 + index)}.
-                      </span>
+                      <span className="mr-3 font-bold">{String.fromCharCode(65 + index)}.</span>
                       {option}
                       {showCorrect && (
                         <motion.span
@@ -659,36 +748,21 @@ export default function StudentLiveQuizPage() {
             </AnimatePresence>
 
             <AnimatePresence mode="wait">
-              {answerFeedback && (
+              {banner && (
                 <motion.div
-                  key={answerFeedback}
+                  key={banner.title}
                   initial={{ opacity: 0, scale: 0.92, y: 10 }}
                   animate={
-                    isCorrect === false
+                    banner.tone === "error"
                       ? { opacity: 1, scale: 1, y: 0, x: [0, -8, 8, -6, 6, 0] }
                       : { opacity: 1, scale: 1, y: 0, x: 0 }
                   }
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.4 }}
-                  className={`mt-5 rounded-lg p-4 ${
-                    isCorrect === true
-                      ? "bg-green-50 text-green-700"
-                      : isCorrect === false
-                        ? "bg-red-50 text-red-700"
-                        : "bg-gray-50 text-gray-600"
-                  }`}
+                  className={`mt-5 rounded-lg p-4 ${toneClass[banner.tone]}`}
                 >
-                  {answerFeedback}
-                  {isCorrect && (
-                    <motion.p
-                      initial={{ opacity: 0, scale: 0.4, y: 10 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      transition={{ type: "spring", stiffness: 400, damping: 12, delay: 0.15 }}
-                      className="mt-1 text-lg font-bold"
-                    >
-                      +{earnedMarks} marks
-                    </motion.p>
-                  )}
+                  <p className="text-lg font-bold">{banner.title}</p>
+                  {banner.detail && <p className="text-sm">{banner.detail}</p>}
                 </motion.div>
               )}
             </AnimatePresence>
@@ -709,16 +783,12 @@ export default function StudentLiveQuizPage() {
         </AnimatePresence>
 
         <section className="rounded-2xl border bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-xl font-bold">Live Leaderboard</h2>
+          <h2 className="mb-4 text-xl font-bold">Leaderboard</h2>
 
           {leaderboard.length === 0 ? (
-            <p className="text-gray-500">Scores will appear here.</p>
+            <p className="text-gray-500">Scores will appear here after each question.</p>
           ) : (
-            <Leaderboard
-              entries={leaderboard}
-              highlightId={socket?.id}
-              highlightName={role?.username}
-            />
+            <AvatarLeaderboard entries={leaderboard} highlightId={socket?.id} />
           )}
         </section>
       </main>
