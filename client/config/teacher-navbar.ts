@@ -12,12 +12,17 @@ export const teacherNavbarLinks = [
   },
   {
     name: "Results",
-    link: "/student/results",
+    link: "/teacher/results",
     logo: "file-chart-column",
   },
   {
     name: "Profile",
-    link: "/student/profile",
+    link: "/teacher/profile",
     logo: "user-round",
   },
+  {
+    name: "Quickzy",
+    link: "/teacher/quickzy",
+    logo: "zap",
+  }
 ] as const;

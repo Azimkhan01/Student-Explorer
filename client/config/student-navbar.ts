@@ -20,4 +20,9 @@ export const studentNavbarLinks = [
     link: "/student/profile",
     logo: "user-round",
   },
+   {
+    name: "Quickzy",
+    link: "/student/quickzy",
+    logo: "zap",
+  },
 ] as const;

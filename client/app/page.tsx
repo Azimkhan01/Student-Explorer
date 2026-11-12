@@ -1,12 +1,14 @@
-import Link from 'next/link'
-import React from 'react'
+import Hero from "@/components/home/Hero"
+import Page2 from "@/components/home/Page2"
+import Navbar from "@/components/layout/Navbar"
 
 const page = () => {
   return (
-    <div>
-      <Link href={'/login'} >User Login</Link>
-      <Link href={'/admin/login'} >Admin Login</Link>
-    </div>
+    <>
+     <Navbar/>   
+     <Hero/>
+     <Page2/>
+    </>
   )
 }
 

@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState } from "react";
@@ -14,7 +15,8 @@ import {
   CalendarCheck,
   FileChartColumn,
   UserRound,
-  SquareCheckBig
+  SquareCheckBig,
+  Zap,
 } from "lucide-react";
 
 const iconMap = {
@@ -25,7 +27,8 @@ const iconMap = {
   "calendar-check": CalendarCheck,
   "file-chart-column": FileChartColumn,
   "user-round": UserRound,
-  'square-check-big':SquareCheckBig
+  "square-check-big": SquareCheckBig,
+  zap: Zap,
 };
 
 interface NavbarLink {
@@ -43,40 +46,28 @@ function Navbar({ links }: NavbarProps) {
   const [isMinimized, setIsMinimized] = useState(false);
 
   return (
-    <header className="fixed bottom-6 left-0 z-50 flex w-full justify-center px-3 sm:px-6">
-      <div className="flex w-fit max-w-full flex-col items-center gap-2">
+    <header className="fixed bottom-6 left-0 z-50 flex w-full justify-center px-3 sm:px-6 pointer-events-none">
 
-        {/* Minimize / Expand Button */}
-        <button
-          onClick={() => setIsMinimized((prev) => !prev)}
-          aria-label={isMinimized ? "Expand navbar" : "Minimize navbar"}
-          aria-expanded={!isMinimized}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/60 bg-white/85 text-slate-600 shadow-lg backdrop-blur-xl transition-all hover:bg-blue-600 hover:text-white"
-        >
-          {isMinimized ? (
-            <ChevronUp size={18} />
-          ) : (
-            <ChevronDown size={18} />
-          )}
-        </button>
+      <div className="flex w-fit max-w-full flex-col items-center gap-2 pointer-events-none">
 
-        {/* Navigation Container */}
+        {/* Navigation */}
         <nav
           aria-label="Main navigation"
           className={`
+            pointer-events-auto
             w-fit max-w-full overflow-hidden rounded-[28px]
             border border-white/60 bg-white/80
             shadow-[0_10px_40px_rgba(0,0,0,0.12)]
             backdrop-blur-2xl ring-1 ring-black/[0.03]
-            origin-bottom transition-all duration-300 ease-in-out
+            transition-all duration-300 ease-in-out
+            origin-bottom
             ${
               isMinimized
-                ? "pointer-events-none max-h-0 translate-y-4 scale-90 opacity-0"
-                : "max-h-24 translate-y-0 scale-100 opacity-100"
+                ? "invisible max-h-0 translate-y-4 scale-90 opacity-0 border-0 shadow-none"
+                : "visible max-h-24 translate-y-0 scale-100 opacity-100"
             }
           `}
         >
-          {/* Scrollable Links */}
           <div
             className="
               flex w-fit max-w-full items-center gap-1
@@ -129,6 +120,29 @@ function Navbar({ links }: NavbarProps) {
             })}
           </div>
         </nav>
+
+        {/* Minimize / Expand Button */}
+        <button
+          onClick={() => setIsMinimized((prev) => !prev)}
+          aria-label={isMinimized ? "Expand navbar" : "Minimize navbar"}
+          aria-expanded={!isMinimized}
+          className="
+            pointer-events-auto
+            flex h-9 w-9 shrink-0 items-center justify-center
+            rounded-full border border-white/60
+            bg-white/90 text-slate-600
+            shadow-lg backdrop-blur-xl
+            transition-all duration-200
+            hover:bg-blue-600 hover:text-white
+          "
+        >
+          {isMinimized ? (
+            <ChevronUp size={18} />
+          ) : (
+            <ChevronDown size={18} />
+          )}
+        </button>
+
       </div>
     </header>
   );

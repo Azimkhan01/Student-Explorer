@@ -9,3 +9,5 @@ export * from './attendance.entity.js';
 export * from './exam.entity.js';
 export * from './exam-result.entity.js';
 export * from './attendance-session.entity.js';
+export * from './qna.entity.js';
+export * from './quickzy.entity.js';

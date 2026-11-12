@@ -14,7 +14,9 @@ import { AttendanceModule } from './attendance/attendance.module.js';
 import { ExamModule } from './exam/exam.module.js';
 import { ExamResultModule } from './exam-result/exam-result.module.js';
 import { StudentExamResultModule } from './student-exam-result/student-exam-result.module.js';
+import { QuickzyModule } from './quickzy/quickzy.module.js';
 import * as Entities from './entity/index.js';
+import { RedisModule } from './utils/redis/redis.module.js';
 
 @Module({
   imports: [
@@ -42,6 +44,8 @@ import * as Entities from './entity/index.js';
     ExamModule,
     ExamResultModule,
     StudentExamResultModule,
+    QuickzyModule,
+    RedisModule
   ],
 
   controllers: [AppController],

@@ -5,8 +5,9 @@ import {
   OneToMany,
   type Relation,
 } from 'typeorm';
-import { ClassSubject } from './class-subject.entity.js';
 
+import { ClassSubject } from './class-subject.entity.js';
+import { Quickzy } from './quickzy.entity.js';
 
 @Entity('teachers')
 export class Teacher {
@@ -22,7 +23,7 @@ export class Teacher {
   @Column({
     type: 'varchar',
     length: 100,
-    nullable:true
+    nullable: true,
   })
   password: string;
 
@@ -35,13 +36,21 @@ export class Teacher {
 
   @Column({
     type: 'boolean',
-    default: false
+    default: false,
   })
   active: boolean;
 
+  // Class Subject Relationship
   @OneToMany(
     () => ClassSubject,
     (classSubject) => classSubject.teacher,
   )
   classSubjects: Relation<ClassSubject[]>;
+
+  // Quickzy Relationship
+  @OneToMany(
+    () => Quickzy,
+    (quickzy) => quickzy.teacher,
+  )
+  quickzies: Relation<Quickzy[]>;
 }
