@@ -1,87 +1,100 @@
 
 "use client";
 
-import React, { useState } from "react";
 import Link from "next/link";
-import {
-  ArrowRight,
-  Menu,
-  X,
-  GraduationCap,
-} from "lucide-react";
+import { useState } from "react";
+import { Menu, X, ArrowUpRight, GraduationCap } from "lucide-react";
 
-function Navbar() {
-  const [mobileMenu, setMobileMenu] = useState(false);
+export default function Navbar() {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const links = [
+    { label: "Home", href: "/" },
+    { label: "How it works", href: "/#how-it-works" },
+    { label: "Quickzy", href: "/quickzy" },
+  ];
 
   return (
-    <header className="sticky top-0 z-50 border-b border-slate-100 bg-white/90 backdrop-blur-xl">
-      <nav className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4 sm:px-8">
-
-        {/* Brand */}
-        <Link href="/" className="flex items-center gap-2">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white shadow-lg shadow-blue-600/20">
-            <GraduationCap size={24} />
-          </div>
-
+    <header className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+      <nav className="mx-auto flex h-[76px] max-w-7xl items-center justify-between px-5 sm:px-8 lg:px-12">
+        <Link href="/" className="flex items-center gap-2.5">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white">
+            <GraduationCap size={23} />
+          </span>
           <span className="text-xl font-extrabold tracking-tight text-slate-900">
-            Student
-            <span className="ml-1 text-blue-600">Explorer</span>
-            <span className="text-blue-600">.</span>
+            Learn<span className="text-blue-600">Space</span>
           </span>
         </Link>
 
-        {/* Desktop actions */}
-        <div className="hidden items-center gap-3 sm:flex">
+        <div className="hidden items-center gap-9 md:flex">
+          {links.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              className="text-sm font-medium text-slate-600 transition hover:text-blue-600"
+            >
+              {link.label}
+            </Link>
+          ))}
+        </div>
+
+        <div className="hidden items-center gap-3 md:flex">
           <Link
             href="/admin/login"
-            className="rounded-full px-5 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-blue-600"
+            className="px-3 py-2 text-sm font-semibold text-slate-600 transition hover:text-blue-600"
           >
-            Admin Portal
+            Admin
           </Link>
-
           <Link
             href="/login"
-            className="group flex items-center gap-2 rounded-full bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-blue-600/20 transition hover:bg-blue-700 hover:shadow-lg"
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
           >
-            Student Login
-            <ArrowRight
-              size={17}
-              className="transition-transform group-hover:translate-x-1"
-            />
+            Student login
+            <ArrowUpRight size={16} />
           </Link>
         </div>
 
-        {/* Mobile menu button */}
         <button
           type="button"
-          onClick={() => setMobileMenu(!mobileMenu)}
-          className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-700 transition hover:bg-slate-50 sm:hidden"
-          aria-label={mobileMenu ? "Close menu" : "Open menu"}
-          aria-expanded={mobileMenu}
+          aria-label={menuOpen ? "Close menu" : "Open menu"}
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((value) => !value)}
+          className="rounded-lg p-2 text-slate-700 hover:bg-slate-100 md:hidden"
         >
-          {mobileMenu ? <X size={22} /> : <Menu size={22} />}
+          {menuOpen ? <X size={23} /> : <Menu size={23} />}
         </button>
       </nav>
 
-      {/* Mobile navigation */}
-      {mobileMenu && (
-        <div className="border-t border-slate-100 bg-white px-5 py-5 shadow-lg sm:hidden">
-          <div className="flex flex-col gap-3">
-            <Link
-              href="/login"
-              onClick={() => setMobileMenu(false)}
-              className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white"
-            >
-              Student Login
-              <ArrowRight size={18} />
-            </Link>
+      {menuOpen && (
+        <div className="border-t border-slate-100 bg-white px-5 py-5 md:hidden">
+          <div className="mx-auto flex max-w-7xl flex-col gap-1">
+            {links.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                onClick={() => setMenuOpen(false)}
+                className="rounded-lg px-3 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-blue-600"
+              >
+                {link.label}
+              </Link>
+            ))}
+
+            <div className="my-2 border-t border-slate-100" />
 
             <Link
               href="/admin/login"
-              onClick={() => setMobileMenu(false)}
-              className="rounded-xl border border-slate-200 px-5 py-3 text-center font-semibold text-slate-700 transition hover:bg-slate-50"
+              onClick={() => setMenuOpen(false)}
+              className="rounded-lg px-3 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
-              Admin Portal
+              Admin portal
+            </Link>
+
+            <Link
+              href="/login"
+              onClick={() => setMenuOpen(false)}
+              className="mt-2 rounded-lg bg-blue-600 px-4 py-3 text-center text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Student login
             </Link>
           </div>
         </div>
@@ -89,5 +102,3 @@ function Navbar() {
     </header>
   );
 }
-
-export default Navbar;

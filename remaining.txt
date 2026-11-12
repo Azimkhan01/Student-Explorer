@@ -1,3 +1,157 @@
-partailly the login page is maded succesfully 
-only the database part is reamining and other is the proper page route 
-jwt and cookie part is also come in the as well.
+```typescript
+export interface QuizPlayer {
+  username: string;
+  email: string;
+}
+
+// Active session (cleared when the tab closes)
+const SESSION_KEY = "quickzy-player";
+// Remembered for pre-filling the form next time
+const PROFILE_KEY = "quickzy-profile";
+
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function read(storage: Storage | undefined, key: string): QuizPlayer | null {
+  try {
+    const raw = storage?.getItem(key);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as Partial<QuizPlayer>;
+    if (typeof p.username === "string" && typeof p.email === "string") {
+      return { username: p.username, email: p.email };
+    }
+  } catch {
+    /* storage blocked or corrupt */
+  }
+  return null;
+}
+
+export function loadPlayer(): QuizPlayer | null {
+  if (typeof window === "undefined") return null;
+  return read(window.sessionStorage, SESSION_KEY);
+}
+
+export function loadProfile(): QuizPlayer | null {
+  if (typeof window === "undefined") return null;
+  return read(window.localStorage, PROFILE_KEY);
+}
+
+export function savePlayer(player: QuizPlayer) {
+  try {
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(player));
+    window.localStorage.setItem(PROFILE_KEY, JSON.stringify(player));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function clearPlayer() {
+  try {
+    window.sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}"use client";
+
+import {
+  animate,
+  motion,
+  useMotionValue,
+  useReducedMotion,
+  useTransform,
+} from "framer-motion";
+import { useEffect, useMemo } from "react";
+
+export interface LeaderboardEntry {
+  rank: number;
+  socketId: string;
+  username: string;
+  avatar?: string;
+  score: number;
+  totalTimeMs: number;
+  answeredQuestions: number;
+}
+
+// ------------------------------------------------------------
+// Number that counts up/down to its new value
+// ------------------------------------------------------------
+export function AnimatedNumber({
+  value,
+  className,
+}: {
+  value: number;
+  className?: string;
+}) {
+  const mv = useMotionValue(value);
+  const rounded = useTransform(mv, (v) => Math.round(v));
+
+  useEffect(() => {
+    const controls = animate(mv, value, { duration: 0.8, ease: "easeOut" });
+    return () => controls.stop();
+  }, [value, mv]);
+
+  return <motion.span className={className}>{rounded}</motion.span>;
+}
+
+// ------------------------------------------------------------
+// Confetti burst (skipped when the user prefers reduced motion)
+// ------------------------------------------------------------
+const CONFETTI_COLORS = [
+  "#6366f1",
+  "#f59e0b",
+  "#10b981",
+  "#ef4444",
+  "#3b82f6",
+  "#ec4899",
+];
+
+export function Confetti({ count = 56 }: { count?: number }) {
+  const reduce = useReducedMotion();
+
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: count }, (_, i) => ({
+        id: i,
+        left: Math.random() * 100,
+        delay: Math.random() * 0.7,
+        duration: 2.4 + Math.random() * 1.8,
+        rotate: Math.random() * 720 - 360,
+        drift: (Math.random() - 0.5) * 180,
+        size: 6 + Math.random() * 6,
+        color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+      })),
+    [count],
+  );
+
+  if (reduce) return null;
+
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none fixed inset-0 z-50 overflow-hidden"
+    >
+      {pieces.map((p) => (
+        <motion.span
+          key={p.id}
+          className="absolute top-0 block rounded-sm"
+          style={{
+            left: `${p.left}%`,
+            width: p.size,
+            height: p.size * 1.6,
+            backgroundColor: p.color,
+          }}
+          initial={{ y: -40, x: 0, rotate: 0, opacity: 1 }}
+          animate={{
+            y: "105vh",
+            x: p.drift,
+            rotate: p.rotate,
+            opacity: [1, 1, 0],
+          }}
+          transition={{ duration: p.duration, delay: p.delay, ease: "easeIn" }}
+        />
+      ))}
+    </div>
+  );
+}
+```
+
+so this is a live quiz interface i want to add some contraint to te lpublic and protected student side there is teacher page with id as a paramtn and ther is another page with code an param and one is the public and other is student side so i want to add some cotnreact on teacher and studnet and pulbic side hat if oyu try to change hte tab or focus ofrm the ttab is off then there will be alert causthat wil lsave that if oyu left hte hcat you will gert disocnet and also ad mroe octnract that will amek this cheaitng freee and also make that if the user disocnnt then teache must be aware about it and also you ca add mroe feartuer on you side that will make it more itnent pbut dont ad mroe page udapte in the same page only and also give me ful udapte code back

@@ -1,240 +1,287 @@
 
-"use client";
-
-import React from "react";
+import Link from "next/link";
 import {
-  BarChart3,
-  Trophy,
-  ClipboardCheck,
-  Zap,
-  BookOpenCheck,
-  TrendingUp,
-  CheckCircle2,
+  ArrowRight,
   ArrowUpRight,
+  BarChart3,
+  BookOpen,
+  Check,
+  ClipboardList,
+  Clock3,
+  Trophy,
+  Users,
+  Zap,
 } from "lucide-react";
 
-function Page2() {
-  const features = [
-    {
-      icon: BarChart3,
-      title: "Batch-wise Performance",
-      description:
-        "Track the academic performance of every batch and understand how students are progressing through their learning journey.",
-      color: "blue",
-      metric: "Every batch",
-    },
-    {
-      icon: ClipboardCheck,
-      title: "Exam & Result Tracking",
-      description:
-        "Conduct regular examinations, evaluate student knowledge, and provide detailed results to identify strengths and weaknesses.",
-      color: "violet",
-      metric: "Real-time results",
-    },
-    {
-      icon: Trophy,
-      title: "Live Test Contests",
-      description:
-        "Organize exciting live quizzes and competitive tests after every lecture to keep students engaged and motivated.",
-      color: "amber",
-      metric: "After every lecture",
-    },
-  ];
+const features = [
+  {
+    number: "01",
+    icon: Users,
+    title: "Know how your batch is doing",
+    description:
+      "See how students are progressing across subjects and batches. Spot learning gaps early and understand where extra support is needed.",
+    detail: "Batch-wise performance",
+  },
+  {
+    number: "02",
+    icon: ClipboardList,
+    title: "Tests with useful results",
+    description:
+      "Conduct assessments, review marks and follow student performance. Results help teachers understand what students have actually learned.",
+    detail: "Exams and result tracking",
+  },
+  {
+    number: "03",
+    icon: Trophy,
+    title: "Make practice competitive",
+    description:
+      "Use short quizzes and live contests to make revision more engaging. Give students a reason to participate after every lecture.",
+    detail: "Live classroom contests",
+  },
+];
 
-  const styles: Record<string, string> = {
-    blue: "bg-blue-50 text-blue-600",
-    violet: "bg-violet-50 text-violet-600",
-    amber: "bg-amber-50 text-amber-600",
-  };
+const learningSteps = [
+  {
+    icon: BookOpen,
+    title: "Learn",
+    description: "Attend lessons and understand new topics.",
+  },
+  {
+    icon: Zap,
+    title: "Practise",
+    description: "Try questions and take part in Quickzy challenges.",
+  },
+  {
+    icon: BarChart3,
+    title: "Review",
+    description: "Check results and see where you can improve.",
+  },
+];
 
-  const benefits = [
-    "Monitor every batch's learning progress",
-    "Evaluate understanding after each lecture",
-    "Identify students who need extra attention",
-    "Encourage participation through live competitions",
-  ];
-
-  const steps = [
-    {
-      icon: BookOpenCheck,
-      title: "Attend Lecture",
-      desc: "Learn new concepts",
-    },
-    {
-      icon: ClipboardCheck,
-      title: "Take Live Test",
-      desc: "Test understanding",
-    },
-    {
-      icon: Trophy,
-      title: "Join Competition",
-      desc: "Challenge other students",
-    },
-    {
-      icon: BarChart3,
-      title: "Analyze Performance",
-      desc: "Track progress and results",
-    },
-  ];
-
+export default function Page2() {
   return (
-    <section className="relative isolate overflow-x-clip bg-white px-5 py-24 sm:px-8 lg:px-16">
-      {/* Background decoration */}
-      <div className="pointer-events-none absolute -left-40 top-20 -z-10 h-96 w-96 rounded-full bg-blue-100/50 blur-3xl" />
-      <div className="pointer-events-none absolute -right-40 bottom-0 -z-10 h-96 w-96 rounded-full bg-indigo-100/50 blur-3xl" />
+    <>
+      <section className="bg-white px-5 py-24 sm:px-8 lg:px-12">
+        <div className="mx-auto max-w-7xl">
+          <div className="max-w-2xl">
+            <p className="text-sm font-bold uppercase tracking-[0.16em] text-blue-600">
+              What you can do here
+            </p>
 
-      <div className="relative mx-auto max-w-7xl">
-        {/* Heading */}
-        <div className="mx-auto mb-16 max-w-3xl text-center">
-          <span className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700">
-            <Zap size={16} />
-            Smart Learning & Performance
-          </span>
+            <h2 className="mt-4 text-3xl font-extrabold leading-tight tracking-tight text-slate-950 sm:text-4xl lg:text-5xl">
+              A classroom experience that doesn't stop at the classroom.
+            </h2>
 
-          <h2 className="mt-6 text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl lg:text-6xl">
-            Every Lecture.
-            <span className="block text-blue-600">
-              Every Test. Every Progress.
-            </span>
-          </h2>
+            <p className="mt-5 max-w-xl text-base leading-8 text-slate-500">
+              Learning, assessment and progress belong together. The platform
+              brings these parts into one place for both students and teachers.
+            </p>
+          </div>
 
-          <p className="mx-auto mt-6 max-w-2xl text-base leading-8 text-slate-500 sm:text-lg">
-            Learning doesn't end when a lecture finishes. We continuously
-            monitor student participation, conduct live contests, and track
-            batch-wise academic performance to ensure every student stays
-            engaged and keeps improving.
-          </p>
-        </div>
+          <div className="mt-16 grid gap-10 md:grid-cols-3 md:gap-8">
+            {features.map((feature) => {
+              const Icon = feature.icon;
 
-        {/* Feature cards */}
-        <div className="grid gap-6 md:grid-cols-3">
-          {features.map((feature, index) => {
-            const Icon = feature.icon;
-
-            return (
-              <div
-                key={index}
-                className="group rounded-3xl border border-slate-200 bg-white p-8 shadow-sm transition-all duration-300 hover:-translate-y-2 hover:border-blue-200 hover:shadow-xl"
-              >
-                <div className="flex items-center justify-between">
-                  <div
-                    className={`flex h-14 w-14 items-center justify-center rounded-2xl ${styles[feature.color]}`}
-                  >
-                    <Icon size={27} />
+              return (
+                <article
+                  key={feature.number}
+                  className="border-t-2 border-slate-200 pt-6 transition-colors hover:border-blue-600"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-bold tracking-wider text-slate-400">
+                      {feature.number}
+                    </span>
+                    <Icon size={25} className="text-blue-600" />
                   </div>
 
-                  <ArrowUpRight
-                    className="text-slate-300 transition group-hover:text-blue-600"
-                    size={22}
-                  />
-                </div>
+                  <p className="mt-8 text-xs font-bold uppercase tracking-wider text-blue-600">
+                    {feature.detail}
+                  </p>
 
-                <p className="mt-8 text-sm font-semibold text-blue-600">
-                  {feature.metric}
-                </p>
+                  <h3 className="mt-3 text-xl font-bold text-slate-900">
+                    {feature.title}
+                  </h3>
 
-                <h3 className="mt-2 text-2xl font-bold text-slate-900">
-                  {feature.title}
-                </h3>
-
-                <p className="mt-4 text-sm leading-7 text-slate-500">
-                  {feature.description}
-                </p>
-              </div>
-            );
-          })}
+                  <p className="mt-4 text-sm leading-7 text-slate-500">
+                    {feature.description}
+                  </p>
+                </article>
+              );
+            })}
+          </div>
         </div>
+      </section>
 
-        {/* Bottom highlight */}
-        <div className="mt-12 overflow-hidden rounded-3xl bg-slate-950 p-8 sm:p-12">
-          <div className="grid items-center gap-10 lg:grid-cols-2">
-            <div>
-              <span className="text-sm font-semibold uppercase tracking-widest text-blue-400">
-                Beyond Traditional Learning
-              </span>
-
-              <h3 className="mt-4 text-3xl font-bold leading-tight text-white sm:text-4xl">
-                We don't just track attendance.
-                <span className="text-blue-400">
-                  {" "}We track actual learning.
-                </span>
-              </h3>
-
-              <p className="mt-5 leading-8 text-slate-400">
-                With post-lecture assessments, live competitions, and detailed
-                performance analytics, we make sure students actively
-                participate instead of simply attending classes.
-              </p>
-
-              <div className="mt-8 space-y-4">
-                {benefits.map((item) => (
-                  <div key={item} className="flex items-center gap-3">
-                    <CheckCircle2
-                      className="shrink-0 text-blue-400"
-                      size={20}
-                    />
-                    <span className="text-sm text-slate-300">{item}</span>
-                  </div>
-                ))}
-              </div>
+      {/* Public Quickzy section */}
+      <section className="bg-[#f4f7fc] px-5 py-20 sm:px-8 lg:px-12">
+        <div className="mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-[1fr_0.85fr]">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-md bg-blue-100 px-3 py-2 text-xs font-bold uppercase tracking-wider text-blue-700">
+              <Zap size={15} />
+              Open to everyone
             </div>
 
-            {/* Learning workflow visual */}
-            <div className="rounded-2xl border border-white/10 bg-white/[0.05] p-6 sm:p-8">
+            <h2 className="mt-6 max-w-xl text-4xl font-extrabold leading-tight tracking-tight text-slate-950 sm:text-5xl">
+              A little practice can go a long way.
+            </h2>
+
+            <p className="mt-5 max-w-xl text-base leading-8 text-slate-600">
+              Quickzy is our quiz space for curious minds. Explore questions,
+              test what you know and challenge yourself at your own pace.
+              You don't need to be signed in to explore public quizzes.
+            </p>
+
+            <div className="mt-7 space-y-3">
+              {[
+                "Explore quizzes available to the public",
+                "Practise topics at your own pace",
+                "Challenge yourself with quick questions",
+              ].map((item) => (
+                <div key={item} className="flex items-center gap-3">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                    <Check size={14} />
+                  </span>
+                  <span className="text-sm font-medium text-slate-700">
+                    {item}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <Link
+              href="/quickzy"
+              className="mt-9 inline-flex items-center gap-3 rounded-lg bg-blue-600 px-6 py-4 text-sm font-bold text-white transition hover:bg-blue-700"
+            >
+              Explore public Quickzy
+              <ArrowRight size={18} />
+            </Link>
+
+            <p className="mt-3 text-xs text-slate-500">
+              Public quiz access is available at /quickzy.
+            </p>
+          </div>
+
+          {/* Quickzy preview */}
+          <div className="relative">
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_20px_55px_-30px_rgba(15,23,42,0.25)] sm:p-8">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-slate-400">Learning cycle</p>
-                  <h4 className="mt-1 text-xl font-bold text-white">
-                    Every Lecture Counts
-                  </h4>
+                  <p className="text-xs font-bold uppercase tracking-wider text-blue-600">
+                    Quickzy
+                  </p>
+                  <h3 className="mt-2 text-2xl font-extrabold text-slate-900">
+                    Pick a topic.
+                    <br />
+                    Give it a try.
+                  </h3>
                 </div>
 
-                <div className="rounded-xl bg-blue-500/20 p-3 text-blue-400">
-                  <TrendingUp size={25} />
+                <div className="rounded-xl bg-amber-50 p-3 text-amber-600">
+                  <Trophy size={26} />
                 </div>
               </div>
 
-              <div className="mt-8 space-y-5">
-                {steps.map((step, index) => {
-                  const StepIcon = step.icon;
+              <div className="mt-8 space-y-3">
+                <div className="flex items-center gap-4 rounded-xl border border-slate-200 p-4">
+                  <div className="rounded-lg bg-blue-50 p-3 text-blue-600">
+                    <BookOpen size={21} />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-bold text-slate-900">
+                      Subject quizzes
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Revise what you've studied
+                    </p>
+                  </div>
+                  <ArrowUpRight size={18} className="text-slate-400" />
+                </div>
 
-                  return (
-                    <div
-                      key={step.title}
-                      className="flex items-center gap-4"
-                    >
-                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-500/15 text-blue-400">
-                        <StepIcon size={22} />
-                      </div>
-
-                      <div className="flex-1">
-                        <h5 className="font-semibold text-white">
-                          {step.title}
-                        </h5>
-                        <p className="mt-1 text-sm text-slate-400">
-                          {step.desc}
-                        </p>
-                      </div>
-
-                      <span className="text-xs font-bold text-slate-500">
-                        0{index + 1}
-                      </span>
-                    </div>
-                  );
-                })}
+                <div className="flex items-center gap-4 rounded-xl border border-slate-200 p-4">
+                  <div className="rounded-lg bg-violet-50 p-3 text-violet-600">
+                    <Clock3 size={21} />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-bold text-slate-900">
+                      Quick challenges
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Test yourself in a few minutes
+                    </p>
+                  </div>
+                  <ArrowUpRight size={18} className="text-slate-400" />
+                </div>
               </div>
 
-              <div className="mt-8 rounded-xl border border-blue-400/20 bg-blue-500/10 p-4 text-center">
-                <p className="text-sm font-semibold text-blue-300">
-                  Continuous Learning. Measurable Improvement.
+              <div className="mt-6 rounded-xl bg-slate-950 p-5 text-white">
+                <p className="text-xs font-semibold uppercase tracking-wider text-blue-300">
+                  Your next challenge
+                </p>
+                <p className="mt-2 text-lg font-bold">
+                  How much do you know?
+                </p>
+                <p className="mt-1 text-sm text-slate-400">
+                  Find out with Quickzy.
                 </p>
               </div>
             </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
+
+      {/* Learning process */}
+      <section
+        id="how-it-works"
+        className="bg-white px-5 py-24 sm:px-8 lg:px-12"
+      >
+        <div className="mx-auto max-w-7xl">
+          <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
+            <div className="max-w-2xl">
+              <p className="text-sm font-bold uppercase tracking-[0.16em] text-blue-600">
+                The learning cycle
+              </p>
+              <h2 className="mt-4 text-3xl font-extrabold tracking-tight text-slate-950 sm:text-4xl">
+                Learn it. Try it. Get better at it.
+              </h2>
+            </div>
+
+            <p className="max-w-md text-sm leading-7 text-slate-500">
+              A simple routine that connects what happens in class with how
+              students practise and measure their progress.
+            </p>
+          </div>
+
+          <div className="mt-14 grid gap-8 md:grid-cols-3">
+            {learningSteps.map((step, index) => {
+              const Icon = step.icon;
+
+              return (
+                <div key={step.title} className="relative">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                    <Icon size={25} />
+                  </div>
+
+                  <p className="mt-6 text-xs font-bold uppercase tracking-wider text-slate-400">
+                    Step 0{index + 1}
+                  </p>
+
+                  <h3 className="mt-2 text-xl font-bold text-slate-900">
+                    {step.title}
+                  </h3>
+
+                  <p className="mt-3 max-w-sm text-sm leading-7 text-slate-500">
+                    {step.description}
+                  </p>
+
+                  {index !== learningSteps.length - 1 && (
+                    <div className="absolute right-0 top-7 hidden h-px w-1/3 bg-slate-200 md:block" />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+    </>
   );
 }
-
-export default Page2;

@@ -1,143 +1,178 @@
 
-"use client";
-
-import React from "react";
 import Link from "next/link";
-import { ArrowRight, Sparkles, PlayCircle, CheckCircle2 } from "lucide-react";
+import {
+  ArrowRight,
+  ArrowUpRight,
+  BookOpen,
+  ChartNoAxesCombined,
+  CirclePlay,
+  ClipboardCheck,
+  Trophy,
+} from "lucide-react";
 
-function Hero() {
+export default function Hero() {
   return (
-    <section className="relative isolate  bg-white px-5 pb-24 pt-20 sm:px-8 lg:pt-28">
-      {/* Background decoration */}
-      <div className="pointer-events-none absolute -top-40 left-1/2 -z-10 h-[500px] w-[700px] -translate-x-1/2 rounded-full bg-blue-100/60 blur-[120px]" />
-      <div className="pointer-events-none absolute right-0 top-40 -z-10 h-72 w-72 rounded-full bg-indigo-100/50 blur-[100px]" />
-
-      <div className="mx-auto max-w-7xl">
-        <div className="mx-auto max-w-4xl text-center">
-
-          {/* Badge */}
-          <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700">
-            <Sparkles size={16} />
-            Smarter Learning. Better Results.
+    <section className="overflow-hidden bg-[#f8faff]">
+      <div className="mx-auto grid max-w-7xl items-center gap-14 px-5 py-20 sm:px-8 sm:py-24 lg:grid-cols-[1.05fr_0.95fr] lg:px-12 lg:py-28">
+        <div>
+          <div className="mb-7 inline-flex items-center gap-2 rounded-md border border-blue-100 bg-white px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-blue-700">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            A better way to learn
           </div>
 
-          {/* Main heading */}
-          <h1 className="text-4xl font-extrabold leading-[1.15] tracking-tight text-slate-950 sm:text-6xl lg:text-7xl">
-            Your Learning Journey,
-            <span className="mt-2 block bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-500 bg-clip-text text-transparent">
-              Reimagined.
+          <h1 className="max-w-2xl text-5xl font-extrabold leading-[1.08] tracking-[-0.045em] text-slate-950 sm:text-6xl lg:text-[68px]">
+            Learn at your pace.
+            <span className="mt-2 block text-blue-600">
+              Know how far you've come.
             </span>
           </h1>
 
-          {/* Description */}
-          <p className="mx-auto mt-7 max-w-2xl text-base leading-8 text-slate-500 sm:text-lg">
-            Learn smarter with structured lectures, interactive live tests,
-            competitive quizzes, and detailed performance tracking.
-            Everything you need to stay ahead, all in one place.
+          <p className="mt-7 max-w-xl text-base leading-8 text-slate-600 sm:text-lg">
+            Your classes, tests, results and learning progress — all in one
+            place. Spend less time figuring out what to study next and more
+            time getting better at it.
           </p>
 
-          {/* CTA buttons */}
-          <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
+          <div className="mt-9 flex flex-col gap-3 sm:flex-row">
             <Link
               href="/login"
-              className="group inline-flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-8 py-4 font-semibold text-white shadow-lg shadow-blue-600/20 transition-all duration-300 hover:-translate-y-1 hover:bg-blue-700 hover:shadow-xl sm:w-auto"
+              className="inline-flex items-center justify-center gap-3 rounded-lg bg-blue-600 px-6 py-4 text-sm font-bold text-white transition hover:bg-blue-700"
             >
-              Start Learning
-              <ArrowRight
-                size={19}
-                className="transition-transform group-hover:translate-x-1"
-              />
+              Go to student portal
+              <ArrowRight size={18} />
             </Link>
 
             <Link
-              href="/admin/login"
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-8 py-4 font-semibold text-slate-700 transition-all duration-300 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 sm:w-auto"
+              href="/quickzy"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-6 py-4 text-sm font-bold text-slate-800 transition hover:border-blue-300 hover:text-blue-700"
             >
-              <PlayCircle size={19} />
-              Admin Portal
+              Try Quickzy
+              <ArrowUpRight size={17} />
             </Link>
           </div>
 
-          {/* Trust points */}
-          <div className="mt-12 flex flex-wrap items-center justify-center gap-x-8 gap-y-4 text-sm font-medium text-slate-500">
+          <div className="mt-10 flex flex-wrap gap-x-7 gap-y-3 border-t border-slate-200 pt-6 text-sm text-slate-500">
             <span className="flex items-center gap-2">
-              <CheckCircle2 size={17} className="text-blue-600" />
-              Interactive Learning
+              <BookOpen size={17} className="text-blue-600" />
+              Organised lessons
             </span>
             <span className="flex items-center gap-2">
-              <CheckCircle2 size={17} className="text-blue-600" />
-              Live Test Contests
+              <ClipboardCheck size={17} className="text-blue-600" />
+              Regular assessments
             </span>
             <span className="flex items-center gap-2">
-              <CheckCircle2 size={17} className="text-blue-600" />
-              Performance Analytics
+              <ChartNoAxesCombined size={17} className="text-blue-600" />
+              Progress reports
             </span>
           </div>
         </div>
 
-        {/* Bottom visual */}
-        <div className="relative mx-auto mt-20 max-w-5xl">
-          <div className="absolute -inset-3 -z-10 rounded-[2rem] bg-gradient-to-r from-blue-200/50 via-indigo-200/40 to-blue-100/50 blur-2xl" />
+        <div className="relative mx-auto w-full max-w-[540px]">
+          <div className="absolute -right-10 -top-10 h-48 w-48 rounded-full bg-blue-200/50 blur-3xl" />
+          <div className="absolute -bottom-10 -left-10 h-48 w-48 rounded-full bg-indigo-200/50 blur-3xl" />
 
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl shadow-slate-900/10 sm:p-5">
-            <div className="rounded-xl bg-slate-50 p-5 sm:p-8">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <p className="text-sm font-medium text-slate-500">
-                    Your learning dashboard
-                  </p>
-                  <h3 className="mt-1 text-xl font-bold text-slate-900 sm:text-2xl">
-                    Learn. Practice. Improve.
-                  </h3>
-                </div>
-
-                <div className="rounded-xl bg-blue-100 px-4 py-2 text-sm font-semibold text-blue-700">
-                  Student Portal
-                </div>
-              </div>
-
-              <div className="mt-8 grid gap-4 sm:grid-cols-3">
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <p className="text-sm text-slate-500">Learning</p>
-                  <h4 className="mt-2 text-xl font-bold text-slate-900">
-                    Structured
-                  </h4>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Lecture-based learning
-                  </p>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <p className="text-sm text-slate-500">Assessments</p>
-                  <h4 className="mt-2 text-xl font-bold text-slate-900">
-                    Interactive
-                  </h4>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Tests after lectures
-                  </p>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <p className="text-sm text-slate-500">Progress</p>
-                  <h4 className="mt-2 text-xl font-bold text-slate-900">
-                    Measurable
-                  </h4>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Track academic growth
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 p-6 text-white sm:p-8">
-                <p className="text-sm font-medium text-blue-100">
-                  The Student Explorer Experience
+          <div className="relative rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_24px_70px_-30px_rgba(15,23,42,0.25)] sm:p-7">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-5">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Student workspace
                 </p>
-                <h4 className="mt-2 text-2xl font-bold sm:text-3xl">
-                  Every lesson takes you one step forward.
-                </h4>
-                <p className="mt-3 max-w-xl text-sm leading-6 text-blue-100">
-                  Practice regularly, compete with fellow students, and
-                  understand your progress with every assessment.
+                <h2 className="mt-1 text-xl font-bold text-slate-900">
+                  Your learning overview
+                </h2>
+              </div>
+              <div className="rounded-xl bg-blue-50 p-3 text-blue-600">
+                <ChartNoAxesCombined size={23} />
+              </div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-2 gap-3">
+              <div className="rounded-xl bg-slate-50 p-4">
+                <p className="text-xs font-medium text-slate-500">
+                  Learning
+                </p>
+                <p className="mt-2 text-lg font-bold text-slate-900">
+                  Lessons
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Follow your class schedule
+                </p>
+              </div>
+              <div className="rounded-xl bg-blue-50 p-4">
+                <p className="text-xs font-medium text-blue-700">
+                  Practice
+                </p>
+                <p className="mt-2 text-lg font-bold text-slate-900">
+                  Quickzy
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Put your knowledge to work
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-slate-200 p-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-bold text-slate-900">
+                    Keep your learning moving
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Learn something. Test yourself. Improve.
+                  </p>
+                </div>
+                <CirclePlay size={25} className="text-blue-600" />
+              </div>
+
+              <div className="mt-5 space-y-4">
+                {[
+                  { icon: BookOpen, label: "Attend your lecture" },
+                  { icon: ClipboardCheck, label: "Attempt a practice test" },
+                  { icon: Trophy, label: "Check your results" },
+                ].map((item, index) => {
+                  const Icon = item.icon;
+                  return (
+                    <div key={item.label} className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                        <Icon size={18} />
+                      </div>
+                      <p className="flex-1 text-sm font-medium text-slate-700">
+                        {item.label}
+                      </p>
+                      <span className="text-xs font-semibold text-slate-400">
+                        0{index + 1}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <Link
+              href="/quickzy"
+              className="mt-4 flex items-center justify-between rounded-xl bg-slate-950 p-4 text-white transition hover:bg-blue-950"
+            >
+              <div>
+                <p className="text-sm font-bold">Ready for a quick challenge?</p>
+                <p className="mt-1 text-xs text-slate-300">
+                  Explore public Quickzy quizzes
+                </p>
+              </div>
+              <ArrowUpRight size={20} />
+            </Link>
+          </div>
+
+          <div className="absolute -bottom-6 -right-3 hidden rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-lg sm:block">
+            <div className="flex items-center gap-3">
+              <div className="rounded-lg bg-amber-50 p-2 text-amber-600">
+                <Trophy size={20} />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-800">
+                  Learn by doing
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  Practice makes progress
                 </p>
               </div>
             </div>
@@ -147,5 +182,3 @@ function Hero() {
     </section>
   );
 }
-
-export default Hero;
