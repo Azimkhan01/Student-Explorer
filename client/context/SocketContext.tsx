@@ -1,4 +1,3 @@
-
 "use client";
 
 import {
@@ -18,16 +17,9 @@ import type {
   ClientToServerEvents,
 } from "@/lib/socket/socket.types";
 
-type SocketInstance = Socket<
-  ServerToClientEvents,
-  ClientToServerEvents
->;
+type SocketInstance = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-type ConnectionStatus =
-  | "connecting"
-  | "connected"
-  | "disconnected"
-  | "error";
+type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
 interface SocketContextType {
   socket: SocketInstance | null;
@@ -37,51 +29,29 @@ interface SocketContextType {
   disconnect: () => void;
 }
 
-const SocketContext = createContext<SocketContextType | undefined>(
-  undefined
-);
+const SocketContext = createContext<SocketContextType | undefined>(undefined);
 
 interface SocketProviderProps {
   children: ReactNode;
   accessToken: string | null;
 }
 
-
-
-export function SocketProvider({
-  children,
-  accessToken,
-}: SocketProviderProps) {
+export function SocketProvider({ children, accessToken }: SocketProviderProps) {
   const [socket, setSocket] = useState<SocketInstance | null>(null);
 
-  const [status, setStatus] =
-    useState<ConnectionStatus>("disconnected");
+  const [status, setStatus] = useState<ConnectionStatus>("disconnected");
 
   useEffect(() => {
-    // Don't establish a connection without authentication.
-    // if (!accessToken) {
-    //   setSocket(null);
-    //   setStatus("disconnected");
-    //   return;
-    // }
-
-    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL;
-console.log(socketUrl);
-
-    if (!socketUrl) {
-      console.error("NEXT_PUBLIC_SOCKET_URL is missing");
-      setStatus("error");
-      return;
-    }
-
     setStatus("connecting");
 
-    const socketInstance: SocketInstance = io(socketUrl, {
-      autoConnect: false,
+    const socketInstance: SocketInstance = io(undefined, {
+      path: "/server/socket.io",
 
-    //   auth: {
-    //     token: accessToken,
-    //   },
+      // Test using HTTP polling only
+      transports: ["polling"],
+
+      autoConnect: false,
+      withCredentials: true,
 
       reconnection: true,
       reconnectionAttempts: Infinity,
@@ -91,6 +61,8 @@ console.log(socketUrl);
 
       timeout: 10000,
     });
+
+    console.log(socketInstance);
 
     const handleConnect = () => {
       setStatus("connected");
@@ -112,7 +84,6 @@ console.log(socketUrl);
     socketInstance.on("connect_error", handleConnectError);
 
     setSocket(socketInstance);
-
     socketInstance.connect();
 
     return () => {
@@ -121,7 +92,6 @@ console.log(socketUrl);
       socketInstance.off("connect_error", handleConnectError);
 
       socketInstance.disconnect();
-
       setSocket(null);
     };
   }, [accessToken]);
@@ -142,13 +112,11 @@ console.log(socketUrl);
       reconnect,
       disconnect,
     }),
-    [socket, status, reconnect, disconnect]
+    [socket, status, reconnect, disconnect],
   );
 
   return (
-    <SocketContext.Provider value={value}>
-      {children}
-    </SocketContext.Provider>
+    <SocketContext.Provider value={value}>{children}</SocketContext.Provider>
   );
 }
 
@@ -156,9 +124,7 @@ export function useSocket() {
   const context = useContext(SocketContext);
 
   if (!context) {
-    throw new Error(
-      "useSocket must be used inside SocketProvider"
-    );
+    throw new Error("useSocket must be used inside SocketProvider");
   }
 
   return context;

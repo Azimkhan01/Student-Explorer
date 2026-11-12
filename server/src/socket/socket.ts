@@ -82,16 +82,29 @@ interface QuestionResult {
 }
 
 @WebSocketGateway({
-  namespace: "/",
+  path: '/socket.io',
+
   cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:3001",
+    origin: (origin, callback) => {
+      const allowedOrigins = (
+        process.env.CLIENT_URL ?? ''
+      )
+        .split(',')
+        .map((url) => url.trim())
+        .filter(Boolean);
+
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Origin not allowed'), false);
+      }
+    },
+
     credentials: true,
   },
-  transports: ["websocket", "polling"],
 })
 export class CreateSocket
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
-{
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
@@ -101,7 +114,7 @@ export class CreateSocket
   // Tiny in-memory throttle so a teacher can't flood the room.
   private lastBroadcastAt = new Map<string, number>();
 
-  constructor(private readonly redisService: RedisService) {}
+  constructor(private readonly redisService: RedisService) { }
 
   // -----------------------------------------
   // KEYS
