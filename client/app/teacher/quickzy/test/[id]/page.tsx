@@ -46,6 +46,7 @@ interface Quickzy {
 }
 
 interface Student {
+  id: string;
   socketId: string;
   username: string;
   email: string;
@@ -53,6 +54,7 @@ interface Student {
   score: number;
   totalTimeMs: number;
   answeredQuestions: number;
+  connected: boolean;
 }
 
 interface LiveQuestion {
@@ -85,10 +87,135 @@ const optionItem = {
 };
 
 const STATUS_BADGE: Record<QuestionResultStatus, { label: string; cls: string }> = {
-  correct: { label: "✅ Correct", cls: "bg-green-100 text-green-700" },
-  wrong: { label: "❌ Wrong", cls: "bg-red-100 text-red-700" },
-  unanswered: { label: "⏳ No answer", cls: "bg-gray-100 text-gray-600" },
+  correct: {
+    label: "✅ Correct",
+    cls: "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-400/30",
+  },
+  wrong: {
+    label: "❌ Wrong",
+    cls: "bg-rose-500/15 text-rose-300 ring-1 ring-rose-400/30",
+  },
+  unanswered: {
+    label: "⏳ No answer",
+    cls: "bg-white/5 text-slate-300 ring-1 ring-white/10",
+  },
 };
+
+// --------------------------------
+// Ambient background: mesh gradient + grid + slow floaters
+// --------------------------------
+function StudioBackdrop() {
+  return (
+    <div aria-hidden className="pointer-events-none fixed inset-0 overflow-hidden">
+      {/* base */}
+      <div className="absolute inset-0 bg-[#0b0b1a]" />
+
+      {/* mesh blobs */}
+      <motion.div
+        className="absolute -left-40 -top-40 h-[42rem] w-[42rem] rounded-full blur-3xl"
+        style={{ background: "radial-gradient(circle, #6366f1 0%, transparent 70%)", opacity: 0.35 }}
+        animate={{ x: [0, 40, 0], y: [0, 30, 0] }}
+        transition={{ duration: 22, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <motion.div
+        className="absolute -right-40 top-1/3 h-[38rem] w-[38rem] rounded-full blur-3xl"
+        style={{ background: "radial-gradient(circle, #a855f7 0%, transparent 70%)", opacity: 0.3 }}
+        animate={{ x: [0, -30, 0], y: [0, 40, 0] }}
+        transition={{ duration: 26, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <motion.div
+        className="absolute bottom-0 left-1/3 h-[34rem] w-[34rem] rounded-full blur-3xl"
+        style={{ background: "radial-gradient(circle, #06b6d4 0%, transparent 70%)", opacity: 0.22 }}
+        animate={{ x: [0, 30, 0], y: [0, -20, 0] }}
+        transition={{ duration: 30, repeat: Infinity, ease: "easeInOut" }}
+      />
+
+      {/* grid */}
+      <div
+        className="absolute inset-0 opacity-[0.07]"
+        style={{
+          backgroundImage:
+            "linear-gradient(to right, #fff 1px, transparent 1px), linear-gradient(to bottom, #fff 1px, transparent 1px)",
+          backgroundSize: "56px 56px",
+          maskImage: "radial-gradient(ellipse at center, black 40%, transparent 80%)",
+          WebkitMaskImage: "radial-gradient(ellipse at center, black 40%, transparent 80%)",
+        }}
+      />
+
+      {/* noise-ish top vignette */}
+      <div className="absolute inset-x-0 top-0 h-64 bg-gradient-to-b from-black/60 to-transparent" />
+    </div>
+  );
+}
+
+// --------------------------------
+// Glassy panel wrapper
+// --------------------------------
+function Glass({
+  children,
+  className = "",
+  glow,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  glow?: "indigo" | "emerald" | "rose" | "amber" | "cyan" | "none";
+}) {
+  const glowMap = {
+    indigo: "shadow-[0_0_80px_-20px_rgba(99,102,241,0.55)] ring-indigo-400/25",
+    emerald: "shadow-[0_0_80px_-20px_rgba(16,185,129,0.55)] ring-emerald-400/25",
+    rose: "shadow-[0_0_80px_-20px_rgba(244,63,94,0.55)] ring-rose-400/25",
+    amber: "shadow-[0_0_80px_-20px_rgba(245,158,11,0.55)] ring-amber-400/25",
+    cyan: "shadow-[0_0_80px_-20px_rgba(6,182,212,0.55)] ring-cyan-400/25",
+    none: "ring-white/10",
+  } as const;
+
+  return (
+    <div
+      className={`relative rounded-3xl bg-white/[0.04] ring-1 backdrop-blur-xl ${glowMap[glow ?? "none"]} ${className}`}
+    >
+      {/* top sheen */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent" />
+      {children}
+    </div>
+  );
+}
+
+// --------------------------------
+// Live "on air" pill
+// --------------------------------
+function OnAirPill({ state }: { state: "live" | "idle" | "offline" | "ended" }) {
+  const styles = {
+    live: "bg-rose-500/15 text-rose-200 ring-rose-400/40",
+    idle: "bg-amber-500/15 text-amber-200 ring-amber-400/40",
+    offline: "bg-white/5 text-slate-300 ring-white/10",
+    ended: "bg-indigo-500/15 text-indigo-200 ring-indigo-400/40",
+  } as const;
+  const dot = {
+    live: "bg-rose-400",
+    idle: "bg-amber-400",
+    offline: "bg-slate-400",
+    ended: "bg-indigo-400",
+  } as const;
+  const label = {
+    live: "ON AIR",
+    idle: "STANDBY",
+    offline: "OFFLINE",
+    ended: "FINISHED",
+  } as const;
+
+  return (
+    <span
+      className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-bold tracking-[0.18em] ring-1 ${styles[state]}`}
+    >
+      <motion.span
+        className={`h-2 w-2 rounded-full ${dot[state]}`}
+        animate={state === "live" ? { scale: [1, 1.7, 1], opacity: [1, 0.4, 1] } : {}}
+        transition={{ duration: 1.4, repeat: Infinity }}
+      />
+      {label[state]}
+    </span>
+  );
+}
 
 // --------------------------------
 // Teacher-only stage: reactions + messages
@@ -112,20 +239,15 @@ function TeacherStage({
   };
 
   return (
-    <motion.section
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", stiffness: 240, damping: 24 }}
-      className="rounded-2xl border bg-white p-6 shadow-sm"
-    >
+    <Glass glow="cyan" className="p-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-xl font-bold">Teacher stage</h2>
-          <p className="text-sm text-gray-500">
+          <h2 className="text-xl font-bold text-white">Teacher stage</h2>
+          <p className="text-sm text-slate-400">
             Only you can send these. Every student sees them live.
           </p>
         </div>
-        <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
+        <span className="rounded-full bg-cyan-500/15 px-3 py-1 text-xs font-semibold text-cyan-200 ring-1 ring-cyan-400/30">
           🎤 Teacher only
         </span>
       </div>
@@ -137,10 +259,10 @@ function TeacherStage({
             type="button"
             disabled={disabled}
             onClick={() => onReact(emoji)}
-            whileHover={{ scale: 1.25, rotate: -6 }}
+            whileHover={{ scale: 1.25, rotate: -8 }}
             whileTap={{ scale: 0.75 }}
             aria-label={`Send ${emoji} reaction`}
-            className="flex h-12 w-12 items-center justify-center rounded-xl border bg-white text-2xl shadow-sm disabled:opacity-50"
+            className="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-white/5 text-2xl shadow-inner ring-1 ring-white/10 transition hover:bg-white/10 disabled:opacity-50"
           >
             {emoji}
           </motion.button>
@@ -160,19 +282,19 @@ function TeacherStage({
           onChange={(e) => setText(e.target.value)}
           placeholder="Type a message for everyone..."
           aria-label="Message to students"
-          className="min-w-0 flex-1 rounded-xl border border-gray-200 p-3 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+          className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/5 p-3 text-white placeholder-slate-500 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/30"
         />
         <motion.button
           type="submit"
           disabled={disabled || !text.trim()}
           whileHover={{ scale: 1.03 }}
           whileTap={{ scale: 0.96 }}
-          className="rounded-xl bg-indigo-600 px-5 font-semibold text-white disabled:opacity-50"
+          className="rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-500 px-5 font-semibold text-white shadow-lg shadow-cyan-500/20 disabled:opacity-40"
         >
           Send
         </motion.button>
       </form>
-      <p className="mt-1 text-right text-xs text-gray-400">
+      <p className="mt-1 text-right text-xs text-slate-500">
         {text.length}/{TEACHER_MESSAGE_MAX}
       </p>
 
@@ -185,19 +307,21 @@ function TeacherStage({
             onClick={() => send(m)}
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.95 }}
-            className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700 disabled:opacity-50"
+            className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-3 py-1.5 text-sm text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50"
           >
             {m}
           </motion.button>
         ))}
       </div>
-    </motion.section>
+    </Glass>
   );
 }
 
 export default function TeacherLiveQuizPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
+
+  const storageKey = `quickzy-teacher-room:${id}`;
 
   const { socket, isConnected } = useSocket();
 
@@ -208,6 +332,7 @@ export default function TeacherLiveQuizPage() {
   const [roomCode, setRoomCode] = useState<number | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [resuming, setResuming] = useState(false);
 
   const [students, setStudents] = useState<Student[]>([]);
   const [leaderboard, setLeaderboard] = useState<RankedEntry[]>([]);
@@ -238,42 +363,26 @@ export default function TeacherLiveQuizPage() {
     !!liveQuestion && !isQuestionEnded && !isTestFinished,
   );
 
-  const resultBySocket = useMemo(
-    () => new Map(results.map((r) => [r.socketId, r.status] as const)),
+  const resultById = useMemo(
+    () => new Map(results.map((r) => [r.id, r.status] as const)),
     [results],
   );
 
-  // --------------------------------
-  // FETCH QUIZ
-  // --------------------------------
-
   const fetchQuickzy = useCallback(async () => {
     if (!id) return;
-
     setLoading(true);
     setError("");
-
     try {
       const response = await fetch(`${API_URL}/${id}`, {
         method: "GET",
         credentials: "include",
         cache: "no-store",
       });
-
-      if (!response.ok) {
-        throw new Error(`Request failed: ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
       const result = await response.json();
       const rawData = result.data ?? result;
-
-      // Your API returns an array containing the Quickzy object.
       const data = Array.isArray(rawData) ? rawData[0] : rawData;
-
-      if (!data || !Array.isArray(data.questions)) {
-        throw new Error("Invalid Quickzy data.");
-      }
-
+      if (!data || !Array.isArray(data.questions)) throw new Error("Invalid Quickzy data.");
       setQuickzy(data as Quickzy);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load quiz.");
@@ -289,11 +398,20 @@ export default function TeacherLiveQuizPage() {
   // --------------------------------
   // SOCKET EVENTS
   // --------------------------------
-
   useEffect(() => {
     if (!socket) return;
 
-    const handleRoomCreated = (data: { roomId: string; code: number }) => {
+    const handleRoomCreated = (data: {
+      roomId: string;
+      code: number;
+      teacherToken?: string;
+    }) => {
+      try {
+        sessionStorage.setItem(
+          storageKey,
+          JSON.stringify({ roomId: data.roomId, teacherToken: data.teacherToken }),
+        );
+      } catch {}
       setRoomId(data.roomId);
       setRoomCode(data.code);
       setStudents([]);
@@ -302,9 +420,51 @@ export default function TeacherLiveQuizPage() {
       setError("");
     };
 
-    const handleRoomError = (data: { message?: string }) => {
+    const handleRoomResumed = (data: {
+      roomId: string;
+      code: number;
+      status: "waiting" | "running" | "question-ended" | "finished";
+      durationSeconds: number;
+      students: Student[];
+      leaderboard: RankedEntry[];
+      answeredIds: string[];
+      answeredCount: number;
+    }) => {
+      setRoomId(data.roomId);
+      setRoomCode(data.code);
+      setStudents(data.students);
+      setLeaderboard(data.leaderboard);
+      setDurationSeconds(data.durationSeconds);
+      setIsTestStarted(data.status !== "waiting");
+      setAnsweredIds(data.answeredIds);
+      setAnsweredCount(data.answeredCount);
+      if (data.status === "finished") {
+        setIsTestFinished(true);
+        setIsQuestionEnded(true);
+      }
+      setResuming(false);
+      setError("");
+    };
+
+    const handleRoomError = (data: { message?: string; code?: string }) => {
+      if (data?.code === "ROOM_GONE") {
+        try {
+          sessionStorage.removeItem(storageKey);
+        } catch {}
+        setRoomId(null);
+        setRoomCode(null);
+        setStudents([]);
+        setLeaderboard([]);
+        setLiveQuestion(null);
+        setIsTestStarted(false);
+        setIsQuestionEnded(false);
+        setIsTestFinished(false);
+        setResuming(false);
+        return;
+      }
       setError(data?.message || "Unable to create room.");
       setIsCreatingRoom(false);
+      setResuming(false);
     };
 
     const handleRoomUsers = (users: Student[]) => setStudents(users);
@@ -341,19 +501,17 @@ export default function TeacherLiveQuizPage() {
 
     const handleLeaderboard = (data: RankedEntry[]) => setLeaderboard(data);
 
-    const handleAnswerReceived = (data: { socketId?: string; answeredCount: number }) => {
+    const handleAnswerReceived = (data: { id?: string; answeredCount: number }) => {
       setAnsweredCount(data.answeredCount);
-      if (data.socketId) {
-        setAnsweredIds((prev) =>
-          prev.includes(data.socketId!) ? prev : [...prev, data.socketId!],
-        );
+      if (data.id) {
+        setAnsweredIds((prev) => (prev.includes(data.id!) ? prev : [...prev, data.id!]));
       }
     };
 
-    const handleStudentRemoved = (data: { socketId: string; answeredCount: number }) => {
+    const handleStudentRemoved = (data: { id: string; answeredCount: number }) => {
       setAnsweredCount(data.answeredCount);
-      setAnsweredIds((prev) => prev.filter((sid) => sid !== data.socketId));
-      setResults((prev) => prev.filter((r) => r.socketId !== data.socketId));
+      setAnsweredIds((prev) => prev.filter((sid) => sid !== data.id));
+      setResults((prev) => prev.filter((r) => r.id !== data.id));
     };
 
     const handleTestFinished = (data: { leaderboard: RankedEntry[] }) => {
@@ -367,6 +525,7 @@ export default function TeacherLiveQuizPage() {
     };
 
     socket.on("room-created", handleRoomCreated);
+    socket.on("room-resumed", handleRoomResumed);
     socket.on("room-error", handleRoomError);
     socket.on("room-users", handleRoomUsers);
     socket.on("question-started", handleQuestionStarted);
@@ -379,6 +538,7 @@ export default function TeacherLiveQuizPage() {
 
     return () => {
       socket.off("room-created", handleRoomCreated);
+      socket.off("room-resumed", handleRoomResumed);
       socket.off("room-error", handleRoomError);
       socket.off("room-users", handleRoomUsers);
       socket.off("question-started", handleQuestionStarted);
@@ -389,28 +549,40 @@ export default function TeacherLiveQuizPage() {
       socket.off("test-finished", handleTestFinished);
       socket.off("test-error", handleTestError);
     };
-  }, [socket]);
+  }, [socket, storageKey]);
+
+  useEffect(() => {
+    if (!socket || !isConnected) return;
+    let saved: { roomId?: string; teacherToken?: string } | null = null;
+    try {
+      const raw = sessionStorage.getItem(storageKey);
+      if (raw) saved = JSON.parse(raw);
+    } catch {}
+    if (!saved?.roomId || !saved?.teacherToken) return;
+    setResuming(true);
+    socket.emit("resume-room", saved);
+    const t = setTimeout(() => setResuming(false), 8000);
+    return () => clearTimeout(t);
+  }, [socket, isConnected, storageKey]);
 
   // --------------------------------
   // ACTIONS
   // --------------------------------
-
   const createRoom = () => {
     if (!socket || !isConnected || !quickzy) {
       setError("Socket is disconnected or quiz information is missing.");
       return;
     }
-
     if (!quickzy.questions.length) {
       setError("This quiz does not contain any questions.");
       return;
     }
-
+    try {
+      sessionStorage.removeItem(storageKey);
+    } catch {}
     setIsCreatingRoom(true);
     setError("");
-
     const code = Math.floor(100000 + Math.random() * 900000);
-
     socket.emit("create-room", {
       code,
       quickzyId: quickzy.id,
@@ -436,11 +608,11 @@ export default function TeacherLiveQuizPage() {
     socket.emit("next-question");
   };
 
-  const removeStudent = (socketId: string) => {
+  const removeStudent = (studentId: string) => {
     if (!socket || !roomId) return;
     setConfirmRemoveId(null);
     setTestError("");
-    socket.emit("remove-student", { socketId });
+    socket.emit("remove-student", { studentId });
   };
 
   const sendReaction = (emoji: string) => {
@@ -459,45 +631,48 @@ export default function TeacherLiveQuizPage() {
       await navigator.clipboard.writeText(String(roomCode));
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
-    } catch {
-      // Clipboard can be blocked; ignore silently.
-    }
+    } catch {}
   };
 
   // --------------------------------
-  // LOADING / ERROR
+  // LOADING
   // --------------------------------
-
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center gap-3 text-gray-600">
-        <motion.span
-          className="h-6 w-6 rounded-full border-4 border-indigo-500 border-t-transparent"
-          animate={{ rotate: 360 }}
-          transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
-        />
-        Loading quiz...
-      </div>
+      <>
+        <StudioBackdrop />
+        <div className="relative flex min-h-screen items-center justify-center gap-3 text-slate-300">
+          <motion.span
+            className="h-6 w-6 rounded-full border-4 border-indigo-400 border-t-transparent"
+            animate={{ rotate: 360 }}
+            transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
+          />
+          Loading quiz...
+        </div>
+      </>
     );
   }
 
   if (error && !quickzy) {
     return (
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex min-h-screen flex-col items-center justify-center gap-4"
-      >
-        <p className="text-red-500">{error}</p>
-        <motion.button
-          whileHover={{ scale: 1.04 }}
-          whileTap={{ scale: 0.96 }}
-          onClick={() => void fetchQuickzy()}
-          className="rounded-lg bg-indigo-600 px-5 py-2 text-white"
+      <>
+        <StudioBackdrop />
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="relative flex min-h-screen flex-col items-center justify-center gap-4"
         >
-          Try Again
-        </motion.button>
-      </motion.div>
+          <p className="text-rose-300">{error}</p>
+          <motion.button
+            whileHover={{ scale: 1.04 }}
+            whileTap={{ scale: 0.96 }}
+            onClick={() => void fetchQuickzy()}
+            className="rounded-lg bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-5 py-2 font-semibold text-white shadow-lg shadow-indigo-500/30"
+          >
+            Try Again
+          </motion.button>
+        </motion.div>
+      </>
     );
   }
 
@@ -505,109 +680,166 @@ export default function TeacherLiveQuizPage() {
 
   const answeredPct =
     students.length > 0 ? Math.min(100, (answeredCount / students.length) * 100) : 0;
+  const onlineCount = students.filter((s) => s.connected).length;
 
   const isLastQuestion =
     liveQuestion !== null && liveQuestion.questionIndex + 1 === liveQuestion.totalQuestions;
-
   const isRunning = liveQuestion !== null && !isQuestionEnded && !isTestFinished;
+
+  const onAirState: "live" | "idle" | "offline" | "ended" =
+    !isConnected
+      ? "offline"
+      : isTestFinished
+        ? "ended"
+        : isTestStarted
+          ? "live"
+          : "idle";
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="min-h-screen bg-gradient-to-b from-indigo-50 via-white to-white">
-        <TeacherBroadcastLayer
-          reactions={reactions}
-          message={message}
-          onReactionDone={removeReaction}
-          onDismissMessage={dismissMessage}
-        />
+      <StudioBackdrop />
+      <TeacherBroadcastLayer
+        reactions={reactions}
+        message={message}
+        onReactionDone={removeReaction}
+        onDismissMessage={dismissMessage}
+      />
 
-        <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 p-5">
-          {isTestFinished && <Confetti />}
+      <main className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 p-5 sm:p-8">
+        {isTestFinished && <Confetti />}
 
-          {/* HEADER */}
-          <motion.header
-            initial={{ opacity: 0, y: -16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ type: "spring", stiffness: 260, damping: 24 }}
-            className="flex flex-wrap items-center justify-between gap-3"
-          >
-            <div>
-              <h1 className="text-3xl font-bold">{quickzy.quickzy_name}</h1>
-              <p className="text-gray-500">Live quiz contest</p>
+        {/* HEADER */}
+        <motion.header
+          initial={{ opacity: 0, y: -16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ type: "spring", stiffness: 260, damping: 24 }}
+          className="flex flex-wrap items-center justify-between gap-3"
+        >
+          <div className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-xl shadow-lg shadow-indigo-500/30">
+              ⚡
             </div>
+            <div>
+              <h1 className="bg-gradient-to-r from-white via-indigo-200 to-fuchsia-200 bg-clip-text text-3xl font-extrabold tracking-tight text-transparent">
+                {quickzy.quickzy_name}
+              </h1>
+              <p className="text-sm text-slate-400">Live quiz contest · Broadcast studio</p>
+            </div>
+          </div>
 
-            <span
-              className={`flex items-center gap-2 rounded-full px-4 py-2 text-sm ${
-                isConnected ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-              }`}
-            >
-              <motion.span
-                className={`h-2.5 w-2.5 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`}
-                animate={isConnected ? { scale: [1, 1.6, 1], opacity: [1, 0.5, 1] } : {}}
-                transition={{ duration: 1.8, repeat: Infinity }}
-              />
-              {isConnected ? "Socket connected" : "Socket disconnected"}
+          <div className="flex items-center gap-2">
+            <OnAirPill state={onAirState} />
+            <span className="hidden rounded-full bg-white/5 px-3 py-1.5 text-xs text-slate-300 ring-1 ring-white/10 sm:inline-flex">
+              {isConnected
+                ? "Realtime · connected"
+                : roomCode !== null
+                  ? "Reconnecting… room kept for 60s"
+                  : "Realtime · disconnected"}
             </span>
-          </motion.header>
+          </div>
+        </motion.header>
 
-          <AnimatePresence>
-            {error && (
-              <motion.p
-                key="error"
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                className="overflow-hidden rounded-lg bg-red-50 p-3 text-red-600"
-              >
-                {error}
-              </motion.p>
-            )}
-          </AnimatePresence>
+        <AnimatePresence>
+          {error && (
+            <motion.p
+              key="error"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="overflow-hidden rounded-xl bg-rose-500/10 p-3 text-rose-300 ring-1 ring-rose-400/30"
+            >
+              {error}
+            </motion.p>
+          )}
+        </AnimatePresence>
 
-          {/* CREATE ROOM */}
-          <AnimatePresence>
-            {!roomCode && (
-              <motion.section
-                key="create"
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.96 }}
-                className="rounded-2xl border bg-white p-6 shadow-sm"
-              >
-                <p className="mb-4 text-gray-600">Create a live room for students to join.</p>
+        <AnimatePresence>
+          {resuming && !roomCode && (
+            <motion.p
+              key="resuming"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="rounded-xl bg-indigo-500/10 p-3 text-indigo-200 ring-1 ring-indigo-400/30"
+            >
+              Restoring your live room...
+            </motion.p>
+          )}
+        </AnimatePresence>
 
-                <motion.button
-                  whileHover={{ scale: 1.03 }}
-                  whileTap={{ scale: 0.97 }}
-                  onClick={createRoom}
-                  disabled={!isConnected || isCreatingRoom}
-                  className="flex items-center gap-2 rounded-lg bg-indigo-600 px-6 py-3 font-semibold text-white disabled:opacity-50"
-                >
-                  {isCreatingRoom && (
-                    <motion.span
-                      className="h-4 w-4 rounded-full border-2 border-white border-t-transparent"
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 0.7, repeat: Infinity, ease: "linear" }}
-                    />
-                  )}
-                  {isCreatingRoom ? "Creating room..." : "Create Live Room"}
-                </motion.button>
-              </motion.section>
-            )}
-          </AnimatePresence>
+        {/* CREATE ROOM */}
+        <AnimatePresence>
+          {!roomCode && !resuming && (
+            <motion.div
+              key="create"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+            >
+              <Glass glow="indigo" className="p-8">
+                <div className="flex flex-col items-center text-center">
+                  <motion.div
+                    animate={{ rotate: [0, 6, -6, 0] }}
+                    transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+                    className="mb-4 text-5xl"
+                  >
+                    🎬
+                  </motion.div>
+                  <h2 className="text-2xl font-bold text-white">Set the stage</h2>
+                  <p className="mt-1 max-w-md text-slate-400">
+                    Spawn a live room, share the code, and broadcast the contest to every
+                    student in real time.
+                  </p>
 
-          {roomCode !== null && (
-            <>
-              {/* ROOM CODE */}
-              <motion.section
-                initial={{ opacity: 0, scale: 0.94 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ type: "spring", stiffness: 220, damping: 22 }}
-                className="rounded-2xl border bg-white p-6 text-center shadow-sm"
-              >
-                <p className="text-gray-500">Share this room code with students</p>
+                  <motion.button
+                    whileHover={{ scale: 1.03 }}
+                    whileTap={{ scale: 0.97 }}
+                    onClick={createRoom}
+                    disabled={!isConnected || isCreatingRoom}
+                    className="mt-6 flex items-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 px-8 py-4 text-lg font-bold text-white shadow-2xl shadow-indigo-500/40 disabled:opacity-50"
+                  >
+                    {isCreatingRoom && (
+                      <motion.span
+                        className="h-4 w-4 rounded-full border-2 border-white border-t-transparent"
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 0.7, repeat: Infinity, ease: "linear" }}
+                      />
+                    )}
+                    {isCreatingRoom ? "Creating room..." : "Create Live Room"}
+                  </motion.button>
+                </div>
+              </Glass>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-                <div className="my-4 flex justify-center gap-2 sm:gap-3">
+        {roomCode !== null && (
+          <>
+            {/* ROOM CODE — the showpiece */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ type: "spring", stiffness: 220, damping: 22 }}
+            >
+              <Glass glow="indigo" className="overflow-hidden p-8 text-center">
+                {/* glow ring */}
+                <div className="pointer-events-none absolute inset-0 opacity-40">
+                  <motion.div
+                    className="absolute left-1/2 top-1/2 h-[28rem] w-[28rem] -translate-x-1/2 -translate-y-1/2 rounded-full"
+                    style={{
+                      background:
+                        "radial-gradient(circle, rgba(99,102,241,0.5) 0%, transparent 60%)",
+                    }}
+                    animate={{ scale: [1, 1.08, 1], opacity: [0.5, 0.85, 0.5] }}
+                    transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+                  />
+                </div>
+
+                <p className="relative text-sm font-medium uppercase tracking-[0.22em] text-indigo-300">
+                  Share this room code
+                </p>
+
+                <div className="relative my-5 flex justify-center gap-2 sm:gap-4">
                   {String(roomCode)
                     .split("")
                     .map((digit, i) => (
@@ -621,7 +853,7 @@ export default function TeacherLiveQuizPage() {
                           damping: 18,
                           delay: 0.1 + i * 0.08,
                         }}
-                        className="flex h-16 w-12 items-center justify-center rounded-xl bg-indigo-600 text-4xl font-extrabold text-white shadow-lg sm:h-20 sm:w-16 sm:text-5xl"
+                        className="flex h-20 w-14 items-center justify-center rounded-2xl bg-gradient-to-b from-indigo-500 to-violet-600 text-5xl font-black text-white shadow-[0_10px_40px_-10px_rgba(99,102,241,0.8)] ring-1 ring-white/20 sm:h-24 sm:w-20 sm:text-6xl"
                       >
                         {digit}
                       </motion.span>
@@ -632,7 +864,7 @@ export default function TeacherLiveQuizPage() {
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={() => void copyCode()}
-                  className="rounded-full border px-4 py-1.5 text-sm font-medium text-gray-700"
+                  className="relative rounded-full bg-white/10 px-5 py-2 text-sm font-semibold text-white ring-1 ring-white/20 hover:bg-white/20"
                 >
                   <AnimatePresence mode="wait" initial={false}>
                     <motion.span
@@ -643,48 +875,58 @@ export default function TeacherLiveQuizPage() {
                       transition={{ duration: 0.15 }}
                       className="block"
                     >
-                      {copied ? "Copied!" : "Copy code"}
+                      {copied ? "✓ Copied!" : "Copy code"}
                     </motion.span>
                   </AnimatePresence>
                 </motion.button>
-              </motion.section>
+              </Glass>
+            </motion.div>
 
-              {/* TEACHER STAGE (reactions + messages) */}
-              <TeacherStage
-                disabled={!isConnected}
-                onReact={sendReaction}
-                onMessage={sendMessage}
-              />
+            {/* TEACHER STAGE */}
+            <TeacherStage
+              disabled={!isConnected}
+              onReact={sendReaction}
+              onMessage={sendMessage}
+            />
 
-              {/* SETTINGS */}
-              <AnimatePresence>
-                {!isTestStarted && (
-                  <motion.section
-                    key="settings"
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -20 }}
-                    className="rounded-2xl border bg-white p-6 shadow-sm"
-                  >
-                    <h2 className="mb-3 text-xl font-bold">Contest settings</h2>
+            {/* SETTINGS */}
+            <AnimatePresence>
+              {!isTestStarted && (
+                <motion.div
+                  key="settings"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                >
+                  <Glass glow="emerald" className="p-6">
+                    <div className="mb-4 flex items-center justify-between">
+                      <h2 className="text-xl font-bold text-white">Contest settings</h2>
+                      <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-slate-300 ring-1 ring-white/10">
+                        {quickzy.questions.length} questions
+                      </span>
+                    </div>
 
-                    <label className="mb-2 block text-sm font-medium">Time per question</label>
+                    <label className="mb-2 block text-sm font-medium text-slate-300">
+                      Time per question
+                    </label>
 
-                    <select
-                      value={durationSeconds}
-                      onChange={(e) => setDurationSeconds(Number(e.target.value))}
-                      className="mb-5 rounded-lg border p-3"
-                    >
+                    <div className="mb-5 flex flex-wrap gap-2">
                       {[10, 15, 20, 30, 45, 60].map((s) => (
-                        <option key={s} value={s}>
-                          {s} seconds
-                        </option>
+                        <motion.button
+                          key={s}
+                          type="button"
+                          onClick={() => setDurationSeconds(s)}
+                          whileTap={{ scale: 0.95 }}
+                          className={`rounded-xl px-4 py-2 text-sm font-semibold ring-1 transition ${
+                            durationSeconds === s
+                              ? "bg-gradient-to-r from-emerald-500 to-cyan-500 text-white ring-emerald-400/40 shadow-lg shadow-emerald-500/25"
+                              : "bg-white/5 text-slate-300 ring-white/10 hover:bg-white/10"
+                          }`}
+                        >
+                          {s}s
+                        </motion.button>
                       ))}
-                    </select>
-
-                    <p className="mb-4 text-gray-500">
-                      {quickzy.questions.length} questions available
-                    </p>
+                    </div>
 
                     <motion.button
                       whileHover={students.length ? { scale: 1.03 } : undefined}
@@ -693,11 +935,11 @@ export default function TeacherLiveQuizPage() {
                         students.length > 0 && isConnected
                           ? {
                               boxShadow: [
-                                "0 0 0 0 rgba(22,163,74,0.5)",
-                                "0 0 0 14px rgba(22,163,74,0)",
+                                "0 0 0 0 rgba(16,185,129,0.55)",
+                                "0 0 0 16px rgba(16,185,129,0)",
                               ],
                             }
-                          : { boxShadow: "0 0 0 0 rgba(22,163,74,0)" }
+                          : { boxShadow: "0 0 0 0 rgba(16,185,129,0)" }
                       }
                       transition={
                         students.length > 0 && isConnected
@@ -706,47 +948,65 @@ export default function TeacherLiveQuizPage() {
                       }
                       onClick={startTest}
                       disabled={!isConnected || students.length === 0}
-                      className="rounded-lg bg-green-600 px-6 py-3 font-semibold text-white disabled:opacity-50"
+                      className="rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 px-8 py-4 text-lg font-bold text-white shadow-xl shadow-emerald-500/30 disabled:opacity-40"
                     >
-                      Start Live Test
+                      🚀 Start Live Test
                     </motion.button>
 
                     {students.length === 0 && (
-                      <p className="mt-2 text-sm text-gray-500">
+                      <p className="mt-2 text-sm text-slate-400">
                         Waiting for at least one student to join.
                       </p>
                     )}
-                  </motion.section>
-                )}
-              </AnimatePresence>
+                  </Glass>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-              {/* LIVE QUESTION */}
-              <AnimatePresence mode="wait">
-                {liveQuestion && !isTestFinished && (
-                  <motion.section
-                    key={liveQuestion.questionIndex}
-                    initial={{ opacity: 0, x: 60 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -60 }}
-                    transition={{ type: "spring", stiffness: 260, damping: 28 }}
-                    className="rounded-2xl border bg-white p-6 shadow-sm"
-                  >
+            {/* LIVE QUESTION */}
+            <AnimatePresence mode="wait">
+              {liveQuestion && !isTestFinished && (
+                <motion.div
+                  key={liveQuestion.questionIndex}
+                  initial={{ opacity: 0, x: 60 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -60 }}
+                  transition={{ type: "spring", stiffness: 260, damping: 28 }}
+                >
+                  <Glass glow="indigo" className="p-6 sm:p-8">
                     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-                      <span className="font-semibold">
-                        Question {liveQuestion.questionIndex + 1} of {liveQuestion.totalQuestions}
-                      </span>
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-[0.22em] text-indigo-300">
+                          Question {liveQuestion.questionIndex + 1} /{" "}
+                          {liveQuestion.totalQuestions}
+                        </p>
+                        <div className="mt-2 h-1.5 w-56 overflow-hidden rounded-full bg-white/10">
+                          <motion.div
+                            className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-fuchsia-400"
+                            initial={false}
+                            animate={{
+                              width: `${((liveQuestion.questionIndex + 1) / liveQuestion.totalQuestions) * 100}%`,
+                            }}
+                            transition={{ type: "spring", stiffness: 120, damping: 20 }}
+                          />
+                        </div>
+                      </div>
 
-                      <QuizTimer
-                        remaining={remainingSeconds}
-                        total={liveQuestion.durationSeconds}
-                        endsAt={liveQuestion.endsAt}
-                        offsetMs={serverOffset}
-                        ended={isQuestionEnded}
-                        size={104}
-                      />
+                      <div className="rounded-2xl bg-white/5 p-2 ring-1 ring-white/10">
+                        <QuizTimer
+                          remaining={remainingSeconds}
+                          total={liveQuestion.durationSeconds}
+                          endsAt={liveQuestion.endsAt}
+                          offsetMs={serverOffset}
+                          ended={isQuestionEnded}
+                          size={104}
+                        />
+                      </div>
                     </div>
 
-                    <h2 className="mb-5 text-2xl font-bold">{liveQuestion.question.question}</h2>
+                    <h2 className="mb-5 bg-gradient-to-br from-white to-indigo-200 bg-clip-text text-3xl font-extrabold leading-tight text-transparent">
+                      {liveQuestion.question.question}
+                    </h2>
 
                     <motion.div
                       variants={optionContainer}
@@ -763,17 +1023,17 @@ export default function TeacherLiveQuizPage() {
                             <motion.div
                               animate={
                                 isCorrect
-                                  ? { scale: [1, 1.04, 1], opacity: 1 }
-                                  : { scale: 1, opacity: isDimmed ? 0.45 : 1 }
+                                  ? { scale: [1, 1.03, 1], opacity: 1 }
+                                  : { scale: 1, opacity: isDimmed ? 0.4 : 1 }
                               }
                               transition={{ duration: 0.5 }}
-                              className={`rounded-xl border p-4 ${
+                              className={`relative overflow-hidden rounded-2xl p-4 ring-1 transition ${
                                 isCorrect
-                                  ? "border-green-500 bg-green-50 text-green-700 ring-2 ring-green-300"
-                                  : "border-gray-200"
+                                  ? "bg-emerald-500/15 text-emerald-100 ring-emerald-400/50 shadow-[0_0_40px_-10px_rgba(16,185,129,0.6)]"
+                                  : "bg-white/5 text-slate-200 ring-white/10"
                               }`}
                             >
-                              <span className="mr-2 font-bold">
+                              <span className="mr-2 font-bold text-indigo-300">
                                 {String.fromCharCode(65 + index)}.
                               </span>
                               {option}
@@ -781,7 +1041,7 @@ export default function TeacherLiveQuizPage() {
                                 <motion.span
                                   initial={{ opacity: 0, x: -8 }}
                                   animate={{ opacity: 1, x: 0 }}
-                                  className="ml-2 text-sm font-semibold"
+                                  className="ml-2 text-sm font-semibold text-emerald-300"
                                 >
                                   ✓ Correct answer
                                 </motion.span>
@@ -794,16 +1054,21 @@ export default function TeacherLiveQuizPage() {
 
                     {/* ANSWER PROGRESS */}
                     <div className="mt-6">
-                      <div className="mb-1 flex justify-between text-sm text-gray-500">
-                        <span>Marks: {liveQuestion.question.marks}</span>
+                      <div className="mb-1 flex justify-between text-sm text-slate-400">
                         <span>
-                          Answers received: <AnimatedNumber value={answeredCount} />
+                          Marks:{" "}
+                          <span className="font-semibold text-amber-300">
+                            {liveQuestion.question.marks}
+                          </span>
+                        </span>
+                        <span>
+                          Answers: <AnimatedNumber value={answeredCount} />
                           {students.length > 0 && ` / ${students.length}`}
                         </span>
                       </div>
-                      <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+                      <div className="h-2.5 overflow-hidden rounded-full bg-white/10">
                         <motion.div
-                          className="h-full rounded-full bg-indigo-500"
+                          className="h-full rounded-full bg-gradient-to-r from-indigo-400 via-fuchsia-400 to-cyan-400"
                           initial={false}
                           animate={{ width: `${answeredPct}%` }}
                           transition={{ type: "spring", stiffness: 140, damping: 20 }}
@@ -822,7 +1087,7 @@ export default function TeacherLiveQuizPage() {
                             whileHover={{ scale: 1.03 }}
                             whileTap={{ scale: 0.97 }}
                             onClick={endQuestionNow}
-                            className="rounded-lg border border-red-300 px-5 py-3 font-semibold text-red-600"
+                            className="rounded-xl bg-rose-500/10 px-5 py-3 font-semibold text-rose-300 ring-1 ring-rose-400/40 hover:bg-rose-500/20"
                           >
                             End question now
                           </motion.button>
@@ -839,19 +1104,21 @@ export default function TeacherLiveQuizPage() {
                             whileHover={{ scale: 1.03 }}
                             whileTap={{ scale: 0.97 }}
                             onClick={nextQuestion}
-                            className="rounded-lg bg-indigo-600 px-6 py-3 font-semibold text-white"
+                            className="rounded-xl bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 px-7 py-3 font-bold text-white shadow-lg shadow-indigo-500/30"
                           >
-                            {isLastQuestion ? "Show Final Results" : "Next Question"}
+                            {isLastQuestion ? "Show Final Results" : "Next Question →"}
                           </motion.button>
                         )}
                       </AnimatePresence>
                     </div>
-                  </motion.section>
-                )}
-              </AnimatePresence>
+                  </Glass>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-              {/* WHO GOT IT RIGHT / WRONG */}
-              {liveQuestion && isQuestionEnded && !isTestFinished && results.length > 0 && (
+            {/* RESULTS */}
+            {liveQuestion && isQuestionEnded && !isTestFinished && results.length > 0 && (
+              <div className="rounded-3xl ring-1 ring-white/10 [&_*]:text-inherit">
                 <QuestionResultsPanel
                   key={`results-${liveQuestion.questionIndex}`}
                   results={results}
@@ -859,173 +1126,204 @@ export default function TeacherLiveQuizPage() {
                   options={liveQuestion.question.options}
                   correctOptionIndex={correctOptionIndex}
                 />
+              </div>
+            )}
+
+            <AnimatePresence>
+              {testError && (
+                <motion.p
+                  key="test-error"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden rounded-xl bg-rose-500/10 p-3 text-rose-300 ring-1 ring-rose-400/30"
+                >
+                  {testError}
+                </motion.p>
+              )}
+            </AnimatePresence>
+
+            {/* PARTICIPANTS */}
+            <Glass glow="none" className="p-6">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-xl font-bold text-white">Participants</h2>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-sm font-semibold text-emerald-300 ring-1 ring-emerald-400/30">
+                    <AnimatedNumber value={onlineCount} /> online
+                  </span>
+                  {students.length !== onlineCount && (
+                    <span className="rounded-full bg-white/5 px-3 py-1 text-sm text-slate-300 ring-1 ring-white/10">
+                      {students.length} total
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {students.length === 0 ? (
+                <div className="flex items-center justify-center gap-2 py-8 text-slate-400">
+                  Waiting for students
+                  {[0, 1, 2].map((i) => (
+                    <motion.span
+                      key={i}
+                      className="h-1.5 w-1.5 rounded-full bg-indigo-400"
+                      animate={{ y: [0, -5, 0], opacity: [0.4, 1, 0.4] }}
+                      transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.15 }}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <ul className="grid gap-3 sm:grid-cols-2">
+                  <AnimatePresence initial={false} mode="popLayout">
+                    {students.map((student) => {
+                      const answered = isRunning && answeredIds.includes(student.id);
+                      const status =
+                        isQuestionEnded && !isTestFinished
+                          ? resultById.get(student.id)
+                          : undefined;
+                      const confirming = confirmRemoveId === student.id;
+
+                      return (
+                        <motion.li
+                          key={student.id}
+                          layout
+                          initial={{ opacity: 0, scale: 0.8, x: -30 }}
+                          animate={{ opacity: 1, scale: 1, x: 0 }}
+                          exit={{ opacity: 0, scale: 0.6, x: 40 }}
+                          transition={{ type: "spring", stiffness: 350, damping: 26 }}
+                          className={`flex items-center gap-3 rounded-2xl p-3 ring-1 transition ${
+                            confirming
+                              ? "bg-rose-500/10 ring-rose-400/50"
+                              : "bg-white/5 ring-white/10"
+                          } ${student.connected ? "" : "opacity-70"}`}
+                        >
+                          <AvatarBadge
+                            avatar={student.avatar}
+                            name={student.username}
+                            size={44}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-semibold text-white">
+                              {student.username}
+                            </p>
+                            <p className="truncate text-sm text-slate-400">
+                              {student.email}
+                            </p>
+                          </div>
+
+                          {!student.connected && (
+                            <span className="whitespace-nowrap rounded-full bg-white/5 px-2 py-1 text-xs font-semibold text-slate-400 ring-1 ring-white/10">
+                              ⚪ Offline
+                            </span>
+                          )}
+
+                          <AnimatePresence mode="popLayout">
+                            {answered && (
+                              <motion.span
+                                key="answered"
+                                initial={{ scale: 0 }}
+                                animate={{ scale: 1 }}
+                                exit={{ scale: 0 }}
+                                className="rounded-full bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-400/30"
+                              >
+                                ✓ Answered
+                              </motion.span>
+                            )}
+                            {status && (
+                              <motion.span
+                                key="status"
+                                initial={{ scale: 0 }}
+                                animate={{ scale: 1 }}
+                                exit={{ scale: 0 }}
+                                className={`whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold ${STATUS_BADGE[status].cls}`}
+                              >
+                                {STATUS_BADGE[status].label}
+                              </motion.span>
+                            )}
+                          </AnimatePresence>
+
+                          {confirming ? (
+                            <div className="flex items-center gap-1">
+                              <motion.button
+                                whileTap={{ scale: 0.94 }}
+                                onClick={() => removeStudent(student.id)}
+                                className="rounded-md bg-rose-500 px-2 py-1 text-xs font-semibold text-white shadow shadow-rose-500/30"
+                              >
+                                Remove
+                              </motion.button>
+                              <motion.button
+                                whileTap={{ scale: 0.94 }}
+                                onClick={() => setConfirmRemoveId(null)}
+                                className="rounded-md bg-white/10 px-2 py-1 text-xs text-slate-200 ring-1 ring-white/10"
+                              >
+                                Cancel
+                              </motion.button>
+                            </div>
+                          ) : (
+                            <motion.button
+                              whileHover={{ scale: 1.15 }}
+                              whileTap={{ scale: 0.85 }}
+                              onClick={() => setConfirmRemoveId(student.id)}
+                              aria-label={`Remove ${student.username} from the quiz`}
+                              title="Remove from quiz"
+                              className="rounded-md p-1.5 text-slate-500 hover:bg-rose-500/10 hover:text-rose-300"
+                            >
+                              ✕
+                            </motion.button>
+                          )}
+                        </motion.li>
+                      );
+                    })}
+                  </AnimatePresence>
+                </ul>
               )}
 
-              <AnimatePresence>
-                {testError && (
-                  <motion.p
-                    key="test-error"
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="overflow-hidden rounded-lg bg-red-50 p-3 text-red-600"
-                  >
-                    {testError}
-                  </motion.p>
-                )}
-              </AnimatePresence>
+              {students.length > 0 && (
+                <p className="mt-3 text-xs text-slate-500">
+                  Removed students are blocked from rejoining this room with the same
+                  email. Students who lose connection stay on the list and keep their
+                  score.
+                </p>
+              )}
+            </Glass>
 
-              {/* PARTICIPANTS */}
-              <section className="rounded-2xl border bg-white p-6 shadow-sm">
-                <div className="mb-4 flex items-center justify-between">
-                  <h2 className="text-xl font-bold">Participants</h2>
-                  <span className="rounded-full bg-green-100 px-3 py-1 text-sm text-green-700">
-                    <AnimatedNumber value={students.length} /> online
-                  </span>
-                </div>
-
-                {students.length === 0 ? (
-                  <div className="flex items-center justify-center gap-2 py-5 text-gray-500">
-                    Waiting for students
-                    {[0, 1, 2].map((i) => (
-                      <motion.span
-                        key={i}
-                        className="h-1.5 w-1.5 rounded-full bg-gray-400"
-                        animate={{ y: [0, -5, 0], opacity: [0.4, 1, 0.4] }}
-                        transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.15 }}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <ul className="grid gap-3 sm:grid-cols-2">
-                    <AnimatePresence initial={false} mode="popLayout">
-                      {students.map((student) => {
-                        const answered = isRunning && answeredIds.includes(student.socketId);
-                        const status =
-                          isQuestionEnded && !isTestFinished
-                            ? resultBySocket.get(student.socketId)
-                            : undefined;
-                        const confirming = confirmRemoveId === student.socketId;
-
-                        return (
-                          <motion.li
-                            key={student.socketId}
-                            layout
-                            initial={{ opacity: 0, scale: 0.8, x: -30 }}
-                            animate={{ opacity: 1, scale: 1, x: 0 }}
-                            exit={{ opacity: 0, scale: 0.6, x: 40 }}
-                            transition={{ type: "spring", stiffness: 350, damping: 26 }}
-                            className={`flex items-center gap-3 rounded-xl border p-3 ${
-                              confirming ? "border-red-300 bg-red-50" : ""
-                            }`}
-                          >
-                            <AvatarBadge
-                              avatar={student.avatar}
-                              name={student.username}
-                              size={44}
-                            />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate font-semibold">{student.username}</p>
-                              <p className="truncate text-sm text-gray-500">{student.email}</p>
-                            </div>
-
-                            <AnimatePresence mode="popLayout">
-                              {answered && (
-                                <motion.span
-                                  key="answered"
-                                  initial={{ scale: 0 }}
-                                  animate={{ scale: 1 }}
-                                  exit={{ scale: 0 }}
-                                  className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700"
-                                >
-                                  ✓ Answered
-                                </motion.span>
-                              )}
-                              {status && (
-                                <motion.span
-                                  key="status"
-                                  initial={{ scale: 0 }}
-                                  animate={{ scale: 1 }}
-                                  exit={{ scale: 0 }}
-                                  className={`whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold ${STATUS_BADGE[status].cls}`}
-                                >
-                                  {STATUS_BADGE[status].label}
-                                </motion.span>
-                              )}
-                            </AnimatePresence>
-
-                            {confirming ? (
-                              <div className="flex items-center gap-1">
-                                <motion.button
-                                  whileTap={{ scale: 0.94 }}
-                                  onClick={() => removeStudent(student.socketId)}
-                                  className="rounded-md bg-red-600 px-2 py-1 text-xs font-semibold text-white"
-                                >
-                                  Remove
-                                </motion.button>
-                                <motion.button
-                                  whileTap={{ scale: 0.94 }}
-                                  onClick={() => setConfirmRemoveId(null)}
-                                  className="rounded-md border bg-white px-2 py-1 text-xs"
-                                >
-                                  Cancel
-                                </motion.button>
-                              </div>
-                            ) : (
-                              <motion.button
-                                whileHover={{ scale: 1.15 }}
-                                whileTap={{ scale: 0.85 }}
-                                onClick={() => setConfirmRemoveId(student.socketId)}
-                                aria-label={`Remove ${student.username} from the quiz`}
-                                title="Remove from quiz"
-                                className="rounded-md p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
-                              >
-                                ✕
-                              </motion.button>
-                            )}
-                          </motion.li>
-                        );
-                      })}
-                    </AnimatePresence>
-                  </ul>
-                )}
-
-                {students.length > 0 && (
-                  <p className="mt-3 text-xs text-gray-400">
-                    Removed students are blocked from rejoining this room with the same email.
-                  </p>
-                )}
-              </section>
-
-              {/* LEADERBOARD */}
-              <AnimatePresence>
-                {(isTestStarted || isTestFinished) && (
-                  <motion.section
-                    key="leaderboard"
-                    initial={{ opacity: 0, y: 24 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="rounded-2xl border bg-white p-6 shadow-sm"
-                  >
-                    <h2 className="mb-4 text-2xl font-bold">
-                      {isTestFinished ? "Final Leaderboard" : "Leaderboard"}
-                    </h2>
+            {/* LEADERBOARD */}
+            <AnimatePresence>
+              {(isTestStarted || isTestFinished) && (
+                <motion.div
+                  key="leaderboard"
+                  initial={{ opacity: 0, y: 24 }}
+                  animate={{ opacity: 1, y: 0 }}
+                >
+                  <Glass glow="amber" className="p-6">
+                    <div className="mb-4 flex items-center justify-between">
+                      <h2 className="text-2xl font-bold text-white">
+                        {isTestFinished ? "🏆 Final Leaderboard" : "Leaderboard"}
+                      </h2>
+                      <span className="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-200 ring-1 ring-amber-400/30">
+                        Live
+                      </span>
+                    </div>
 
                     {isTestFinished && <AvatarPodium entries={leaderboard} />}
 
                     {leaderboard.length === 0 ? (
-                      <p className="text-gray-500">No scores yet.</p>
+                      <p className="text-slate-400">No scores yet.</p>
                     ) : (
                       <div className="mt-4">
                         <AvatarLeaderboard entries={leaderboard} showTime />
                       </div>
                     )}
-                  </motion.section>
-                )}
-              </AnimatePresence>
-            </>
-          )}
-        </main>
-      </div>
+                  </Glass>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </>
+        )}
+
+        <footer className="mt-auto pt-4 text-center text-xs text-slate-500">
+          Quickzy Studio · Realtime contest broadcasting
+        </footer>
+      </main>
     </MotionConfig>
   );
 }

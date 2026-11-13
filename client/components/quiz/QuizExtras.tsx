@@ -177,8 +177,6 @@ export function QuizTimer({
           strokeWidth="8"
           strokeLinecap="round"
           initial={{ pathLength: startRatio }}
-          // The target changes slightly when the question ends, so an early
-          // "End question now" re-triggers the animation and stops the ring.
           animate={{ pathLength: ended ? 0.0001 : 0 }}
           transition={
             ended ? { duration: 0.3 } : { duration: durationSec, ease: "linear" }
@@ -227,10 +225,10 @@ export function AvatarLeaderboard({
     <ul className="space-y-2">
       <AnimatePresence initial={false}>
         {entries.map((e) => {
-          const mine = !!highlightId && e.socketId === highlightId;
+          const mine = !!highlightId && e.id === highlightId;
           return (
             <motion.li
-              key={e.socketId}
+              key={e.id}
               layout
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
@@ -240,7 +238,6 @@ export function AvatarLeaderboard({
                 mine ? "border-indigo-400 bg-indigo-50" : "border-gray-200 bg-white"
               }`}
             >
-              {/* score bar, grows with the score relative to the leader */}
               <motion.div
                 aria-hidden
                 className={`absolute inset-y-0 left-0 ${
@@ -251,7 +248,11 @@ export function AvatarLeaderboard({
                 transition={{ type: "spring", stiffness: 120, damping: 22 }}
               />
 
-              <div className="relative flex items-center gap-3 p-3">
+              <div
+                className={`relative flex items-center gap-3 p-3 ${
+                  e.connected === false ? "opacity-60" : ""
+                }`}
+              >
                 <span className="w-8 text-center text-lg font-bold text-gray-600">
                   {e.rank <= 3 ? MEDALS[e.rank - 1] : `#${e.rank}`}
                 </span>
@@ -262,6 +263,11 @@ export function AvatarLeaderboard({
                     {mine && (
                       <span className="ml-2 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
                         You
+                      </span>
+                    )}
+                    {e.connected === false && (
+                      <span className="ml-2 text-[10px] font-semibold uppercase text-gray-400">
+                        offline
                       </span>
                     )}
                   </p>
@@ -301,7 +307,7 @@ export function AvatarPodium({ entries }: { entries: RankedEntry[] }) {
     <div className="flex items-end justify-center gap-3 pt-6">
       {order.map((e) => (
         <motion.div
-          key={e.socketId}
+          key={e.id}
           initial={{ opacity: 0, y: 40 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{
@@ -337,7 +343,7 @@ export function AvatarPodium({ entries }: { entries: RankedEntry[] }) {
 export type QuestionResultStatus = "correct" | "wrong" | "unanswered";
 
 export interface QuestionResult {
-  socketId: string;
+  id: string; // stable student id
   username: string;
   avatar?: string;
   status: QuestionResultStatus;
@@ -404,7 +410,7 @@ export function QuestionResultsPanel({
   if (results.length === 0) return null;
 
   const total = Math.max(1, results.length);
-  const fastestId = grouped.correct[0]?.socketId;
+  const fastestId = grouped.correct[0]?.id;
   const maxVotes = Math.max(1, ...(distribution ?? [0]));
 
   return (
@@ -421,7 +427,6 @@ export function QuestionResultsPanel({
         </span>
       </div>
 
-      {/* segmented bar: right / wrong / no answer */}
       <div
         role="img"
         aria-label={`${grouped.correct.length} correct, ${grouped.wrong.length} wrong, ${grouped.unanswered.length} unanswered`}
@@ -438,7 +443,6 @@ export function QuestionResultsPanel({
         ))}
       </div>
 
-      {/* how many picked each option */}
       {distribution && options && options.length > 0 && (
         <div className="mt-5 space-y-2">
           {options.map((option, i) => {
@@ -478,7 +482,6 @@ export function QuestionResultsPanel({
         </div>
       )}
 
-      {/* people, grouped */}
       <div className="mt-6 space-y-5">
         {RESULT_ORDER.map((key) => {
           const list = grouped[key];
@@ -498,12 +501,15 @@ export function QuestionResultsPanel({
               <motion.ul
                 initial="hidden"
                 animate="show"
-                variants={{ hidden: {}, show: { transition: { staggerChildren: 0.05, delayChildren: 0.2 } } }}
+                variants={{
+                  hidden: {},
+                  show: { transition: { staggerChildren: 0.05, delayChildren: 0.2 } },
+                }}
                 className="flex flex-wrap gap-2"
               >
                 {list.map((r) => {
-                  const mine = !!highlightId && r.socketId === highlightId;
-                  const fastest = key === "correct" && r.socketId === fastestId;
+                  const mine = !!highlightId && r.id === highlightId;
+                  const fastest = key === "correct" && r.id === fastestId;
 
                   let detail = "no answer";
                   if (key === "correct") {
@@ -514,7 +520,7 @@ export function QuestionResultsPanel({
 
                   return (
                     <motion.li
-                      key={r.socketId}
+                      key={r.id}
                       variants={chipVariants}
                       whileHover={{ scale: 1.04 }}
                       className={`flex items-center gap-2 rounded-full border py-1 pl-1 pr-3 text-sm ${group.chip} ${
@@ -546,7 +552,6 @@ export function QuestionResultsPanel({
 
 // ============================================================
 // TEACHER BROADCASTS: floating reactions + message banner
-// (only the teacher can send these; everyone in the room sees them)
 // ============================================================
 export const TEACHER_REACTIONS = ["👏", "🔥", "🎉", "😮", "💡", "❤️", "😂", "🚀"];
 
@@ -618,7 +623,6 @@ export function TeacherBroadcastLayer({
   onReactionDone: (id: string) => void;
   onDismissMessage: () => void;
 }) {
-  // Auto-hide the message banner after a few seconds.
   useEffect(() => {
     if (!message) return;
     const t = setTimeout(onDismissMessage, 7000);

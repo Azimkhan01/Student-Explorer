@@ -11,12 +11,13 @@ import { useEffect, useMemo } from "react";
 
 export interface LeaderboardEntry {
   rank: number;
-  socketId: string;
+  id: string; // stable student id (survives reconnects)
   username: string;
   avatar?: string;
   score: number;
   totalTimeMs: number;
   answeredQuestions: number;
+  connected?: boolean;
 }
 
 // ------------------------------------------------------------

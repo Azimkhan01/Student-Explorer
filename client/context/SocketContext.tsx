@@ -55,7 +55,7 @@ export function SocketProvider({ children, accessToken }: SocketProviderProps) {
 
       reconnection: true,
       reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
+      reconnectionDelay: 500,
       reconnectionDelayMax: 5000,
       randomizationFactor: 0.5,
 

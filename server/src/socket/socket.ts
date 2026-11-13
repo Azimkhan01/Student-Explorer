@@ -9,6 +9,7 @@ import {
   ConnectedSocket,
 } from "@nestjs/websockets";
 
+import { createHash, randomUUID } from "crypto";
 import { Server, Socket } from "socket.io";
 import { RedisService } from "../utils/redis/redis.service.js";
 
@@ -17,20 +18,13 @@ const AVATARS = [
   "🐧", "🦉", "🐳", "🦋", "🚀", "⭐", "🔥", "🎮",
 ];
 
-// Reactions only the teacher can send (allow-list, nothing else is broadcast).
 const TEACHER_REACTIONS = ["👏", "🔥", "🎉", "😮", "💡", "❤️", "😂", "🚀"];
-
 const MAX_TEACHER_MESSAGE_LENGTH = 140;
-
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Safety net: Redis deletes room keys this long after the last activity,
-// even if the server crashed and no cleanup code ever ran.
-const ROOM_TTL_SECONDS = 6 * 60 * 60; // 6 hours
-
-// After the final leaderboard, keep the room this long so students can
-// read their results. Then everything is deleted.
-const FINISHED_GRACE_MS = 10 * 60 * 1000; // 10 minutes
+const ROOM_TTL_SECONDS = 6 * 60 * 60; // safety net
+const FINISHED_GRACE_MS = 10 * 60 * 1000; // keep results after the quiz ends
+const TEACHER_GRACE_MS = 60 * 1000; // teacher may reconnect within this time
 
 interface Question {
   id?: string;
@@ -41,19 +35,22 @@ interface Question {
 }
 
 interface Student {
-  socketId: string;
+  id: string; // STABLE id (hash of roomId + email). Survives reconnects.
+  socketId: string; // CURRENT socket (empty string while offline)
   email: string;
   username: string;
   avatar: string;
   score: number;
   totalTimeMs: number;
   answeredQuestions: number;
+  connected: boolean;
 }
 
 interface RoomMeta {
   roomId: string;
   code: number;
   teacherSocketId: string;
+  teacherToken: string;
   teacherId: string;
   quickzyId: string;
 }
@@ -70,9 +67,8 @@ interface QuizData {
   questions: Question[];
 }
 
-// Who answered what, revealed to everyone once a question ends.
 interface QuestionResult {
-  socketId: string;
+  id: string;
   username: string;
   avatar: string;
   status: "correct" | "wrong" | "unanswered";
@@ -81,40 +77,43 @@ interface QuestionResult {
   earnedMarks: number;
 }
 
-@WebSocketGateway({
-  path: '/socket.io',
+interface LastResult {
+  questionIndex: number;
+  correctOptionIndex: number;
+  results: QuestionResult[];
+  distribution: number[];
+}
 
+@WebSocketGateway({
+  path: "/socket.io",
   cors: {
     origin: (origin, callback) => {
-      const allowedOrigins = (
-        process.env.CLIENT_URL ?? ''
-      )
-        .split(',')
+      const allowedOrigins = (process.env.CLIENT_URL ?? "")
+        .split(",")
         .map((url) => url.trim())
         .filter(Boolean);
 
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(new Error('Origin not allowed'), false);
+        callback(new Error("Origin not allowed"), false);
       }
     },
-
     credentials: true,
   },
 })
 export class CreateSocket
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
   @WebSocketServer()
   server: Server;
 
   private questionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-  // Tiny in-memory throttle so a teacher can't flood the room.
+  private teacherTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastBroadcastAt = new Map<string, number>();
 
-  constructor(private readonly redisService: RedisService) { }
+  constructor(private readonly redisService: RedisService) {}
 
   // -----------------------------------------
   // KEYS
@@ -123,43 +122,46 @@ export class CreateSocket
   private roomMetaKey(roomId: string) {
     return `quickzy-room:${roomId}:meta`;
   }
-
   private roomUsersKey(roomId: string) {
     return `quickzy-room:${roomId}:users`;
   }
-
   private roomCodeKey(code: number) {
     return `quickzy-${code}`;
   }
-
   private quizKey(roomId: string) {
     return `quickzy-room:${roomId}:quiz`;
   }
-
   private testStateKey(roomId: string) {
     return `quickzy-room:${roomId}:test-state`;
   }
-
   private answersKey(roomId: string, questionIndex: number) {
     return `quickzy-room:${roomId}:answers:${questionIndex}`;
   }
-
-  // Emails the teacher removed from this room (hash: email -> "1").
   private bannedKey(roomId: string) {
     return `quickzy-room:${roomId}:banned`;
   }
-
-  // Matches every key that belongs to one room (including answers + banned).
+  private lastResultKey(roomId: string) {
+    return `quickzy-room:${roomId}:last-result`;
+  }
+  private finishLockKey(roomId: string, questionIndex: number) {
+    return `quickzy-room:${roomId}:lock:${questionIndex}`;
+  }
   private roomPattern(roomId: string) {
     const safe = roomId.replace(/[\\*?[\]]/g, "\\$&");
     return `quickzy-room:${safe}:*`;
   }
 
   // -----------------------------------------
-  // LIFECYCLE / CLEANUP HELPERS
+  // HELPERS
   // -----------------------------------------
 
-  // Push the TTL of the room's core keys forward. Called on activity.
+  private makeStudentId(roomId: string, email: string) {
+    return createHash("sha256")
+      .update(`${roomId}:${email}`)
+      .digest("hex")
+      .slice(0, 16);
+  }
+
   private async touchRoom(roomId: string, code: number) {
     const keys = [
       this.roomMetaKey(roomId),
@@ -167,6 +169,7 @@ export class CreateSocket
       this.quizKey(roomId),
       this.testStateKey(roomId),
       this.bannedKey(roomId),
+      this.lastResultKey(roomId),
       this.roomCodeKey(code),
     ];
 
@@ -175,15 +178,16 @@ export class CreateSocket
     );
   }
 
-  // Delete every Redis key and in-memory timer that belongs to a room.
   private async destroyRoom(roomId: string, knownCode?: number) {
-    const qTimer = this.questionTimers.get(roomId);
-    if (qTimer) clearTimeout(qTimer);
-    this.questionTimers.delete(roomId);
-
-    const cTimer = this.cleanupTimers.get(roomId);
-    if (cTimer) clearTimeout(cTimer);
-    this.cleanupTimers.delete(roomId);
+    for (const map of [
+      this.questionTimers,
+      this.cleanupTimers,
+      this.teacherTimers,
+    ]) {
+      const t = map.get(roomId);
+      if (t) clearTimeout(t);
+      map.delete(roomId);
+    }
 
     try {
       let code = knownCode;
@@ -195,10 +199,8 @@ export class CreateSocket
         code = meta?.code;
       }
 
-      // meta, users, quiz, test-state, banned and every answers:<n> hash.
       await this.redisService.deleteByPattern(this.roomPattern(roomId));
 
-      // Join-code lookup key.
       if (code !== undefined) {
         await this.redisService.delete(this.roomCodeKey(code));
       }
@@ -209,12 +211,11 @@ export class CreateSocket
     }
   }
 
-  // true => the caller is sending too fast and should be ignored.
-  private isRateLimited(socketId: string, minGapMs: number) {
+  private isRateLimited(key: string, minGapMs: number) {
     const now = Date.now();
-    const last = this.lastBroadcastAt.get(socketId) ?? 0;
+    const last = this.lastBroadcastAt.get(key) ?? 0;
     if (now - last < minGapMs) return true;
-    this.lastBroadcastAt.set(socketId, now);
+    this.lastBroadcastAt.set(key, now);
     return false;
   }
 
@@ -222,11 +223,20 @@ export class CreateSocket
     return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
+  private toSafeQuestion(question: Question) {
+    return {
+      id: question.id,
+      question: question.question,
+      options: question.options,
+      marks: question.marks,
+    };
+  }
+
   // -----------------------------------------
   // GATEWAY HOOKS
   // -----------------------------------------
 
-  afterInit(server: Server) {
+  afterInit(_server: Server) {
     console.log("Live Quiz Socket Gateway Initialized");
   }
 
@@ -237,19 +247,19 @@ export class CreateSocket
   async handleDisconnect(client: Socket) {
     console.log("Client disconnected:", client.id);
 
-    this.lastBroadcastAt.delete(client.id);
+    this.lastBroadcastAt.delete(`${client.id}:reaction`);
+    this.lastBroadcastAt.delete(`${client.id}:message`);
 
     const { role, roomId } = client.data;
-
     if (!roomId) return;
 
     if (role === "teacher") {
-      await this.endTeacherRoom(client, roomId);
+      await this.onTeacherDisconnected(client, roomId);
       return;
     }
 
     if (role === "student") {
-      await this.removeStudent(client, roomId);
+      await this.onStudentDisconnected(client, roomId);
     }
   }
 
@@ -284,23 +294,16 @@ export class CreateSocket
       }
 
       const codeKey = this.roomCodeKey(payload.code);
-      const existingRoom = await this.redisService.get(codeKey);
-
-      if (existingRoom) {
-        client.emit("room-error", {
-          message: "Room code already exists. Please try again.",
-        });
-        return;
-      }
 
       const teacherId = String(payload.teacher_id);
-
       const roomId = `${payload.code}-${payload.quickzyId}-${teacherId}`;
+      const teacherToken = randomUUID();
 
       const meta: RoomMeta = {
         roomId,
         code: payload.code,
         teacherSocketId: client.id,
+        teacherToken,
         teacherId,
         quickzyId: payload.quickzyId,
       };
@@ -313,13 +316,24 @@ export class CreateSocket
         durationSeconds: 20,
       };
 
+      const claimed = await this.redisService.setNx(
+        codeKey,
+        roomId,
+        ROOM_TTL_SECONDS,
+      );
+
+      if (!claimed) {
+        client.emit("room-error", {
+          message: "Room code already exists. Please try again.",
+        });
+        return;
+      }
+
       await client.join(roomId);
 
       client.data.role = "teacher";
       client.data.roomId = roomId;
 
-      // Every key is created with a TTL so nothing can live forever.
-      await this.redisService.set(codeKey, roomId, ROOM_TTL_SECONDS);
       await this.redisService.setObject(
         this.roomMetaKey(roomId),
         meta,
@@ -339,6 +353,7 @@ export class CreateSocket
       client.emit("room-created", {
         roomId,
         code: payload.code,
+        teacherToken,
         message: "Room created successfully.",
       });
 
@@ -347,7 +362,6 @@ export class CreateSocket
       console.log("Live quiz room created:", roomId);
     } catch (error) {
       console.error("Create room error:", error);
-
       client.emit("room-error", {
         message: "Unable to create the live quiz room.",
       });
@@ -355,7 +369,94 @@ export class CreateSocket
   }
 
   // -----------------------------------------
-  // JOIN ROOM
+  // TEACHER RESUMES AFTER REFRESH / LOST CONNECTION
+  // -----------------------------------------
+
+  @SubscribeMessage("resume-room")
+  async resumeRoom(
+    @MessageBody() payload: { roomId?: string; teacherToken?: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    try {
+      const roomId = typeof payload?.roomId === "string" ? payload.roomId : "";
+      const token =
+        typeof payload?.teacherToken === "string" ? payload.teacherToken : "";
+
+      const meta = roomId
+        ? await this.redisService.getObject<RoomMeta>(this.roomMetaKey(roomId))
+        : null;
+
+      if (!meta || !token || meta.teacherToken !== token) {
+        client.emit("room-error", {
+          code: "ROOM_GONE",
+          message: "This room no longer exists.",
+        });
+        return;
+      }
+
+      const pending = this.teacherTimers.get(roomId);
+      if (pending) clearTimeout(pending);
+      this.teacherTimers.delete(roomId);
+
+      meta.teacherSocketId = client.id;
+      await this.redisService.setObject(
+        this.roomMetaKey(roomId),
+        meta,
+        ROOM_TTL_SECONDS,
+      );
+
+      await client.join(roomId);
+      client.data.role = "teacher";
+      client.data.roomId = roomId;
+
+      const state = await this.redisService.getObject<TestState>(
+        this.testStateKey(roomId),
+      );
+      const quiz = await this.redisService.getObject<QuizData>(
+        this.quizKey(roomId),
+      );
+
+      if (!state || !quiz) {
+        client.emit("room-error", {
+          code: "ROOM_GONE",
+          message: "This room no longer exists.",
+        });
+        return;
+      }
+
+      await this.replayState(client, roomId, state, quiz);
+
+      const students = await this.getRoomStudents(roomId);
+      const leaderboard = await this.getLeaderboard(roomId);
+
+      let answeredIds: string[] = [];
+      if (state.currentQuestionIndex >= 0) {
+        const answers = await this.redisService.hGetAll(
+          this.answersKey(roomId, state.currentQuestionIndex),
+        );
+        answeredIds = Object.keys(answers);
+      }
+
+      client.emit("room-resumed", {
+        roomId,
+        code: meta.code,
+        status: state.status,
+        durationSeconds: state.durationSeconds,
+        students,
+        leaderboard,
+        answeredIds,
+        answeredCount: answeredIds.length,
+      });
+
+      console.log("Teacher resumed room:", roomId);
+    } catch (error) {
+      console.error("Resume room error:", error);
+      client.emit("room-error", { message: "Unable to resume the room." });
+    }
+  }
+
+  // -----------------------------------------
+  // JOIN ROOM (new student OR reconnecting student)
   // -----------------------------------------
 
   @SubscribeMessage("join-room")
@@ -396,6 +497,7 @@ export class CreateSocket
 
       if (!roomId) {
         client.emit("room-error", {
+          code: "ROOM_GONE",
           message: "Invalid room code. Room does not exist.",
         });
         return;
@@ -407,12 +509,12 @@ export class CreateSocket
 
       if (!meta) {
         client.emit("room-error", {
+          code: "ROOM_GONE",
           message: "Room information is missing.",
         });
         return;
       }
 
-      // The teacher removed this person earlier: keep them out.
       const isBanned = await this.redisService.hExists(
         this.bannedKey(roomId),
         email,
@@ -420,36 +522,115 @@ export class CreateSocket
 
       if (isBanned) {
         client.emit("room-error", {
+          code: "BANNED",
           message: "The teacher removed you from this quiz.",
         });
         return;
+      }
+
+      const state = await this.redisService.getObject<TestState>(
+        this.testStateKey(roomId),
+      );
+      const quiz = await this.redisService.getObject<QuizData>(
+        this.quizKey(roomId),
+      );
+
+      if (!state || !quiz) {
+        client.emit("room-error", {
+          code: "ROOM_GONE",
+          message: "Room information is missing.",
+        });
+        return;
+      }
+
+      const id = this.makeStudentId(roomId, email);
+      const rawExisting = await this.redisService.hGet(
+        this.roomUsersKey(roomId),
+        id,
+      );
+      const existing = rawExisting ? (JSON.parse(rawExisting) as Student) : null;
+
+      // A finished quiz only accepts people who already took part.
+      if (!existing && state.status === "finished") {
+        client.emit("room-error", {
+          code: "FINISHED",
+          message: "This quiz has already finished.",
+        });
+        return;
+      }
+
+      // ---------- RECONNECT: same socket re-emitting join-room ----------
+      // Do NOT replace the record, do NOT notify teacher. Just re-sync.
+      if (existing && existing.socketId === client.id) {
+        await client.join(roomId);
+        client.data.role = "student";
+        client.data.roomId = roomId;
+        client.data.id = id;
+        client.data.email = email;
+        client.data.username = username;
+
+        client.emit("room-joined", {
+          roomId,
+          code: payload.code,
+          id,
+          rejoined: true,
+          message: "Reconnected to the live quiz.",
+        });
+
+        await this.replayState(client, roomId, state, quiz, id);
+
+        const leaderboard = await this.getLeaderboard(roomId);
+        client.emit("leaderboard-updated", leaderboard);
+        return;
+      }
+
+      // ---------- SAME PERSON ON A NEW SOCKET (tab/device) ----------
+      if (existing && existing.socketId && existing.socketId !== client.id) {
+        const olds = await this.server.in(existing.socketId).fetchSockets();
+        for (const old of olds) {
+          old.emit("session-replaced", {
+            message: "You joined this quiz from another tab or device.",
+          });
+          old.leave(roomId);
+        }
       }
 
       await client.join(roomId);
 
       client.data.role = "student";
       client.data.roomId = roomId;
+      client.data.id = id;
       client.data.email = email;
       client.data.username = username;
 
-      // Only allow avatars from the allow-list.
       const avatar = AVATARS.includes(payload.avatar ?? "")
         ? (payload.avatar as string)
-        : AVATARS[0];
+        : (existing?.avatar ?? AVATARS[0]);
 
-      const student: Student = {
-        socketId: client.id,
-        email,
-        username,
-        avatar,
-        score: 0,
-        totalTimeMs: 0,
-        answeredQuestions: 0,
-      };
+      // Reconnect keeps score / time / answered count. Only socket changes.
+      const student: Student = existing
+        ? {
+            ...existing,
+            socketId: client.id,
+            username,
+            avatar,
+            connected: true,
+          }
+        : {
+            id,
+            socketId: client.id,
+            email,
+            username,
+            avatar,
+            score: 0,
+            totalTimeMs: 0,
+            answeredQuestions: 0,
+            connected: true,
+          };
 
       await this.redisService.hSet(
         this.roomUsersKey(roomId),
-        client.id,
+        id,
         JSON.stringify(student),
       );
 
@@ -457,41 +638,102 @@ export class CreateSocket
 
       const students = await this.getRoomStudents(roomId);
 
+      // Notify teacher (new join OR reconnect that needs the list refreshed)
       this.server.to(meta.teacherSocketId).emit("student-joined", student);
       this.server.to(meta.teacherSocketId).emit("room-users", students);
 
       client.emit("room-joined", {
         roomId,
         code: payload.code,
-        message: "Successfully joined the live quiz.",
+        id,
+        rejoined: !!existing,
+        message: existing
+          ? "Reconnected to the live quiz."
+          : "Successfully joined the live quiz.",
       });
 
-      // If the test is already running, send the current question.
-      const state = await this.redisService.getObject<TestState>(
-        this.testStateKey(roomId),
-      );
+      // Put the (re)connected student back where the quiz currently is.
+      await this.replayState(client, roomId, state, quiz, id);
 
-      const quiz = await this.redisService.getObject<QuizData>(
-        this.quizKey(roomId),
-      );
-
-      if (
-        state?.status === "running" &&
-        quiz?.questions[state.currentQuestionIndex]
-      ) {
-        this.emitQuestionToStudent(client, state, quiz.questions);
-      }
-
-      // Broadcast so every student's participant count stays correct.
       const leaderboard = await this.getLeaderboard(roomId);
       this.server.to(roomId).emit("leaderboard-updated", leaderboard);
 
-      console.log("Student joined:", student.username);
+      console.log(
+        existing ? "Student reconnected:" : "Student joined:",
+        student.username,
+      );
     } catch (error) {
       console.error("Join room error:", error);
-
       client.emit("room-error", {
         message: "Something went wrong while joining the room.",
+      });
+    }
+  }
+
+  // Sends one client whatever it needs to show the current quiz state.
+  private async replayState(
+    client: Socket,
+    roomId: string,
+    state: TestState,
+    quiz: QuizData,
+    studentId?: string,
+  ) {
+    if (state.status === "running") {
+      this.emitQuestionToClient(client, state, quiz.questions);
+
+      if (studentId) {
+        const raw = await this.redisService.hGet(
+          this.answersKey(roomId, state.currentQuestionIndex),
+          studentId,
+        );
+        if (raw) {
+          const a = JSON.parse(raw) as {
+            selectedOptionIndex: number;
+            responseTimeMs: number;
+          };
+          client.emit("answer-locked", {
+            questionIndex: state.currentQuestionIndex,
+            selectedOptionIndex: a.selectedOptionIndex,
+            responseTimeMs: a.responseTimeMs,
+          });
+        }
+      }
+      return;
+    }
+
+    if (state.status === "question-ended") {
+      this.emitQuestionToClient(client, state, quiz.questions);
+
+      const last = await this.redisService.getObject<LastResult>(
+        this.lastResultKey(roomId),
+      );
+
+      if (last) {
+        const leaderboard = await this.getLeaderboard(roomId);
+        client.emit("question-ended", { ...last, leaderboard });
+
+        const mine = studentId
+          ? last.results.find((r) => r.id === studentId)
+          : undefined;
+
+        if (mine) {
+          client.emit("answer-result", {
+            answered: mine.status !== "unanswered",
+            isCorrect: mine.status === "correct",
+            earnedMarks: mine.earnedMarks,
+            selectedOptionIndex: mine.selectedOptionIndex,
+            responseTimeMs: mine.responseTimeMs,
+          });
+        }
+      }
+      return;
+    }
+
+    if (state.status === "finished") {
+      const leaderboard = await this.getLeaderboard(roomId);
+      client.emit("test-finished", {
+        message: "The live test has finished!",
+        leaderboard,
       });
     }
   }
@@ -502,8 +744,7 @@ export class CreateSocket
 
   @SubscribeMessage("start-test")
   async startTest(
-    @MessageBody()
-    payload: { durationSeconds?: number },
+    @MessageBody() payload: { durationSeconds?: number },
     @ConnectedSocket() client: Socket,
   ) {
     try {
@@ -514,22 +755,17 @@ export class CreateSocket
       const state = await this.redisService.getObject<TestState>(
         this.testStateKey(roomId),
       );
-
       const quiz = await this.redisService.getObject<QuizData>(
         this.quizKey(roomId),
       );
 
       if (!state || !quiz || !quiz.questions.length) {
-        client.emit("test-error", {
-          message: "Quiz information is missing.",
-        });
+        client.emit("test-error", { message: "Quiz information is missing." });
         return;
       }
 
       if (state.status !== "waiting") {
-        client.emit("test-error", {
-          message: "The test has already started.",
-        });
+        client.emit("test-error", { message: "The test has already started." });
         return;
       }
 
@@ -547,9 +783,7 @@ export class CreateSocket
       await this.startQuestion(roomId, 0);
     } catch (error) {
       console.error("Start test error:", error);
-      client.emit("test-error", {
-        message: "Unable to start the test.",
-      });
+      client.emit("test-error", { message: "Unable to start the test." });
     }
   }
 
@@ -568,7 +802,7 @@ export class CreateSocket
       const emoji = String(payload?.emoji ?? "");
       if (!TEACHER_REACTIONS.includes(emoji)) return;
 
-      if (this.isRateLimited(client.id, 150)) return;
+      if (this.isRateLimited(`${client.id}:reaction`, 150)) return;
 
       this.server.to(client.data.roomId).emit("teacher-reaction", {
         id: this.makeEventId(),
@@ -594,7 +828,7 @@ export class CreateSocket
 
       if (!text) return;
 
-      if (this.isRateLimited(client.id, 600)) {
+      if (this.isRateLimited(`${client.id}:message`, 600)) {
         client.emit("test-error", {
           message: "Slow down a little before sending another message.",
         });
@@ -612,22 +846,22 @@ export class CreateSocket
   }
 
   // -----------------------------------------
-  // TEACHER-ONLY: REMOVE A STUDENT
+  // TEACHER-ONLY: REMOVE A STUDENT (by stable id)
   // -----------------------------------------
 
   @SubscribeMessage("remove-student")
   async removeStudentByTeacher(
-    @MessageBody() payload: { socketId?: string },
+    @MessageBody() payload: { studentId?: string },
     @ConnectedSocket() client: Socket,
   ) {
     try {
       if (client.data.role !== "teacher" || !client.data.roomId) return;
 
       const roomId = client.data.roomId;
-      const targetId =
-        typeof payload?.socketId === "string" ? payload.socketId : "";
+      const studentId =
+        typeof payload?.studentId === "string" ? payload.studentId : "";
 
-      if (!targetId) return;
+      if (!studentId) return;
 
       const meta = await this.redisService.getObject<RoomMeta>(
         this.roomMetaKey(roomId),
@@ -637,7 +871,7 @@ export class CreateSocket
 
       const raw = await this.redisService.hGet(
         this.roomUsersKey(roomId),
-        targetId,
+        studentId,
       );
 
       if (!raw) {
@@ -649,17 +883,10 @@ export class CreateSocket
 
       const student = JSON.parse(raw) as Student;
 
-      // 1) Forget the student and block their email from rejoining.
-      await this.redisService.hDel(this.roomUsersKey(roomId), targetId);
-
-      await this.redisService.hSet(
-        this.bannedKey(roomId),
-        student.email,
-        "1",
-      );
+      await this.redisService.hDel(this.roomUsersKey(roomId), studentId);
+      await this.redisService.hSet(this.bannedKey(roomId), student.email, "1");
       await this.redisService.expire(this.bannedKey(roomId), ROOM_TTL_SECONDS);
 
-      // 2) Drop their answer for the running question so counts stay right.
       const state = await this.redisService.getObject<TestState>(
         this.testStateKey(roomId),
       );
@@ -668,12 +895,11 @@ export class CreateSocket
 
       if (state && state.currentQuestionIndex >= 0) {
         const answerKey = this.answersKey(roomId, state.currentQuestionIndex);
-        await this.redisService.hDel(answerKey, targetId);
+        await this.redisService.hDel(answerKey, studentId);
         answeredCount = await this.redisService.hLen(answerKey);
       }
 
-      // 3) Tell the student and take them out of the socket room.
-      const targets = await this.server.in(targetId).fetchSockets();
+      const targets = await this.server.in(student.socketId).fetchSockets();
 
       for (const target of targets) {
         target.emit("removed-from-room", {
@@ -682,12 +908,11 @@ export class CreateSocket
         target.leave(roomId);
       }
 
-      // 4) Refresh everyone else.
       const students = await this.getRoomStudents(roomId);
       const leaderboard = await this.getLeaderboard(roomId);
 
       this.server.to(roomId).emit("student-removed", {
-        socketId: targetId,
+        id: studentId,
         username: student.username,
         answeredCount,
       });
@@ -698,9 +923,7 @@ export class CreateSocket
       console.log("Student removed by teacher:", student.username);
     } catch (error) {
       console.error("Remove student (teacher) error:", error);
-      client.emit("test-error", {
-        message: "Unable to remove the student.",
-      });
+      client.emit("test-error", { message: "Unable to remove the student." });
     }
   }
 
@@ -712,11 +935,9 @@ export class CreateSocket
     const quiz = await this.redisService.getObject<QuizData>(
       this.quizKey(roomId),
     );
-
     const state = await this.redisService.getObject<TestState>(
       this.testStateKey(roomId),
     );
-
     const meta = await this.redisService.getObject<RoomMeta>(
       this.roomMetaKey(roomId),
     );
@@ -746,21 +967,12 @@ export class CreateSocket
       ROOM_TTL_SECONDS,
     );
 
-    // Activity: keep the rest of the room alive too.
     if (meta) await this.touchRoom(roomId, meta.code);
 
     await this.redisService.delete(this.answersKey(roomId, questionIndex));
 
-    // Never send correct_answer to students.
-    const safeQuestion = {
-      id: question.id,
-      question: question.question,
-      options: question.options,
-      marks: question.marks,
-    };
-
     this.server.to(roomId).emit("question-started", {
-      question: safeQuestion,
+      question: this.toSafeQuestion(question),
       questionIndex,
       totalQuestions: quiz.questions.length,
       durationSeconds: state.durationSeconds,
@@ -779,7 +991,7 @@ export class CreateSocket
     this.questionTimers.set(roomId, timer);
   }
 
-  private emitQuestionToStudent(
+  private emitQuestionToClient(
     client: Socket,
     state: TestState,
     questions: Question[],
@@ -788,12 +1000,7 @@ export class CreateSocket
     if (!question) return;
 
     client.emit("question-started", {
-      question: {
-        id: question.id,
-        question: question.question,
-        options: question.options,
-        marks: question.marks,
-      },
+      question: this.toSafeQuestion(question),
       questionIndex: state.currentQuestionIndex,
       totalQuestions: questions.length,
       durationSeconds: state.durationSeconds,
@@ -805,27 +1012,25 @@ export class CreateSocket
 
   // -----------------------------------------
   // STUDENT SUBMITS ANSWER
-  // (stores the choice only; nothing is revealed until the timer ends)
   // -----------------------------------------
 
   @SubscribeMessage("submit-answer")
   async submitAnswer(
     @MessageBody()
-    payload: {
-      questionIndex: number;
-      selectedOptionIndex: number;
-    },
+    payload: { questionIndex: number; selectedOptionIndex: number },
     @ConnectedSocket() client: Socket,
   ) {
     try {
       if (client.data.role !== "student" || !client.data.roomId) return;
 
       const roomId = client.data.roomId;
+      const studentId: string | undefined = client.data.id;
+
+      if (!studentId) return;
 
       const state = await this.redisService.getObject<TestState>(
         this.testStateKey(roomId),
       );
-
       const quiz = await this.redisService.getObject<QuizData>(
         this.quizKey(roomId),
       );
@@ -838,19 +1043,15 @@ export class CreateSocket
       }
 
       if (
-        payload.questionIndex !== state.currentQuestionIndex ||
-        !Number.isInteger(payload.selectedOptionIndex)
+        payload?.questionIndex !== state.currentQuestionIndex ||
+        !Number.isInteger(payload?.selectedOptionIndex)
       ) {
-        client.emit("answer-error", {
-          message: "Invalid question or answer.",
-        });
+        client.emit("answer-error", { message: "Invalid question or answer." });
         return;
       }
 
       if (Date.now() > (state.questionEndsAt ?? 0)) {
-        client.emit("answer-error", {
-          message: "Time is up!",
-        });
+        client.emit("answer-error", { message: "Time is up!" });
         return;
       }
 
@@ -861,33 +1062,18 @@ export class CreateSocket
         payload.selectedOptionIndex < 0 ||
         payload.selectedOptionIndex >= question.options.length
       ) {
-        client.emit("answer-error", {
-          message: "Invalid option selected.",
-        });
+        client.emit("answer-error", { message: "Invalid option selected." });
         return;
       }
 
-      const answerKey = this.answersKey(roomId, state.currentQuestionIndex);
-
-      const alreadyAnswered = await this.redisService.hExists(
-        answerKey,
-        client.id,
-      );
-
-      if (alreadyAnswered) {
-        client.emit("answer-error", {
-          code: "ALREADY_ANSWERED",
-          message: "You have already submitted your answer.",
-        });
-        return;
-      }
-
-      const userExists = await this.redisService.hExists(
+      const rawUser = await this.redisService.hGet(
         this.roomUsersKey(roomId),
-        client.id,
+        studentId,
       );
+      const user = rawUser ? (JSON.parse(rawUser) as Student) : null;
 
-      if (!userExists) {
+      // Guard against a stale tab: the record must point at THIS socket.
+      if (!user || !user.socketId || user.socketId !== client.id) {
         client.emit("answer-error", {
           message: "Your student session was not found.",
         });
@@ -899,46 +1085,58 @@ export class CreateSocket
         Date.now() - (state.questionStartedAt ?? Date.now()),
       );
 
-      // Only store the choice. Scoring happens when the question ends.
-      await this.redisService.hSet(
+      const answerKey = this.answersKey(roomId, state.currentQuestionIndex);
+
+      const stored = await this.redisService.hSetNx(
         answerKey,
-        client.id,
+        studentId,
         JSON.stringify({
           selectedOptionIndex: payload.selectedOptionIndex,
           responseTimeMs,
         }),
       );
 
-      // The answers hash gets its own TTL so it can never outlive the room.
+      if (!stored) {
+        client.emit("answer-error", {
+          code: "ALREADY_ANSWERED",
+          message: "You have already submitted your answer.",
+        });
+        return;
+      }
+
       await this.redisService.expire(answerKey, ROOM_TTL_SECONDS);
 
       client.emit("answer-locked", {
         questionIndex: state.currentQuestionIndex,
+        selectedOptionIndex: payload.selectedOptionIndex,
         responseTimeMs,
       });
 
       this.server.to(roomId).emit("answer-received", {
-        socketId: client.id,
+        id: studentId,
         answeredCount: await this.redisService.hLen(answerKey),
       });
     } catch (error) {
       console.error("Submit answer error:", error);
-
-      client.emit("answer-error", {
-        message: "Unable to submit your answer.",
-      });
+      client.emit("answer-error", { message: "Unable to submit your answer." });
     }
   }
 
   // -----------------------------------------
-  // FINISH QUESTION (scoring + reveal happen only here)
+  // FINISH QUESTION (scoring + reveal only here)
   // -----------------------------------------
 
   private async finishQuestion(roomId: string, questionIndex: number) {
+    const gotLock = await this.redisService.setNx(
+      this.finishLockKey(roomId, questionIndex),
+      "1",
+      ROOM_TTL_SECONDS,
+    );
+    if (!gotLock) return;
+
     const state = await this.redisService.getObject<TestState>(
       this.testStateKey(roomId),
     );
-
     const quiz = await this.redisService.getObject<QuizData>(
       this.quizKey(roomId),
     );
@@ -960,7 +1158,6 @@ export class CreateSocket
     const correctOptionIndex = Number(question.correct_answer);
     const marks = Number(question.marks) || 0;
 
-    // Lock first: late answers and duplicate timers are rejected.
     await this.redisService.setObject(
       this.testStateKey(roomId),
       { ...state, status: "question-ended" },
@@ -977,11 +1174,11 @@ export class CreateSocket
 
     await Promise.all(
       students.map(async (student) => {
-        const raw = answers[student.socketId];
+        const raw = answers[student.id];
 
         if (!raw) {
           results.push({
-            socketId: student.socketId,
+            id: student.id,
             username: student.username,
             avatar: student.avatar,
             status: "unanswered",
@@ -1013,7 +1210,7 @@ export class CreateSocket
         }
 
         results.push({
-          socketId: student.socketId,
+          id: student.id,
           username: student.username,
           avatar: student.avatar,
           status: isCorrect ? "correct" : "wrong",
@@ -1028,7 +1225,7 @@ export class CreateSocket
 
         await this.redisService.hSet(
           this.roomUsersKey(roomId),
-          student.socketId,
+          student.id,
           JSON.stringify(student),
         );
 
@@ -1042,7 +1239,6 @@ export class CreateSocket
       }),
     );
 
-    // correct (fastest first) -> wrong (fastest first) -> unanswered (A-Z)
     const statusOrder = { correct: 0, wrong: 1, unanswered: 2 } as const;
 
     results.sort((a, b) => {
@@ -1055,21 +1251,31 @@ export class CreateSocket
       return (a.responseTimeMs ?? 0) - (b.responseTimeMs ?? 0);
     });
 
+    const lastResult: LastResult = {
+      questionIndex,
+      correctOptionIndex,
+      results,
+      distribution,
+    };
+
+    await this.redisService.setObject(
+      this.lastResultKey(roomId),
+      lastResult,
+      ROOM_TTL_SECONDS,
+    );
+
     const leaderboard = await this.getLeaderboard(roomId);
 
     this.server.to(roomId).emit("question-ended", {
-      questionIndex,
-      correctOptionIndex,
+      ...lastResult,
       leaderboard,
-      results,
-      distribution,
     });
 
     this.server.to(roomId).emit("leaderboard-updated", leaderboard);
   }
 
   // -----------------------------------------
-  // TEACHER ENDS THE QUESTION EARLY
+  // TEACHER ENDS THE QUESTION EARLY / NEXT QUESTION
   // -----------------------------------------
 
   @SubscribeMessage("end-question")
@@ -1090,10 +1296,6 @@ export class CreateSocket
       client.emit("test-error", { message: "Unable to end the question." });
     }
   }
-
-  // -----------------------------------------
-  // TEACHER MOVES TO NEXT QUESTION
-  // -----------------------------------------
 
   @SubscribeMessage("next-question")
   async nextQuestion(@ConnectedSocket() client: Socket) {
@@ -1116,9 +1318,7 @@ export class CreateSocket
       await this.startQuestion(roomId, state.currentQuestionIndex + 1);
     } catch (error) {
       console.error("Next question error:", error);
-      client.emit("test-error", {
-        message: "Unable to load the next question.",
-      });
+      client.emit("test-error", { message: "Unable to load the next question." });
     }
   }
 
@@ -1128,8 +1328,7 @@ export class CreateSocket
 
   private async getRoomStudents(roomId: string): Promise<Student[]> {
     const users = await this.redisService.hGetAll(this.roomUsersKey(roomId));
-
-    return Object.values(users).map((user) => JSON.parse(user));
+    return Object.values(users).map((user) => JSON.parse(user) as Student);
   }
 
   private async getLeaderboard(roomId: string) {
@@ -1142,12 +1341,13 @@ export class CreateSocket
       })
       .map((student, index) => ({
         rank: index + 1,
-        socketId: student.socketId,
+        id: student.id,
         username: student.username,
         avatar: student.avatar,
         score: student.score,
         totalTimeMs: student.totalTimeMs,
         answeredQuestions: student.answeredQuestions,
+        connected: student.connected,
       }));
   }
 
@@ -1188,20 +1388,17 @@ export class CreateSocket
       leaderboard,
     });
 
-    // The code can no longer be used to join a finished quiz.
-    if (meta) {
-      await this.redisService.delete(this.roomCodeKey(meta.code));
-    }
-
-    // Backstop: if the server restarts before the timer below fires,
-    // Redis itself removes the room shortly after the grace period.
     const graceSeconds = Math.ceil(FINISHED_GRACE_MS / 1000) + 60;
+
     await this.redisService.expireByPattern(
       this.roomPattern(roomId),
       graceSeconds,
     );
 
-    // Explicit cleanup once students have had time to read the results.
+    if (meta) {
+      await this.redisService.expire(this.roomCodeKey(meta.code), graceSeconds);
+    }
+
     const existing = this.cleanupTimers.get(roomId);
     if (existing) clearTimeout(existing);
 
@@ -1214,61 +1411,62 @@ export class CreateSocket
   }
 
   // -----------------------------------------
-  // STUDENT DISCONNECT
+  // STUDENT DISCONNECT: keep their score, mark offline
   // -----------------------------------------
 
-  private async removeStudent(client: Socket, roomId: string) {
+  private async onStudentDisconnected(client: Socket, roomId: string) {
     try {
+      const studentId: string | undefined = client.data.id;
+      if (!studentId) return;
+
       const meta = await this.redisService.getObject<RoomMeta>(
         this.roomMetaKey(roomId),
       );
-
-      // Room already destroyed.
       if (!meta) return;
 
-      // Already removed (for example by the teacher): nothing left to do.
-      const stillInRoom = await this.redisService.hExists(
+      const raw = await this.redisService.hGet(
         this.roomUsersKey(roomId),
-        client.id,
+        studentId,
       );
+      if (!raw) return;
 
-      if (!stillInRoom) return;
+      const student = JSON.parse(raw) as Student;
 
-      await this.redisService.hDel(this.roomUsersKey(roomId), client.id);
+      // The student already reconnected on a newer socket. Ignore this old one.
+      if (student.socketId !== client.id) return;
+
+      // IMPORTANT: keep the record even in the lobby so a quick reconnect
+      // (or page reload) re-attaches to the same row instead of starting
+      // from scratch. Mark offline and clear the socket id.
+      student.connected = false;
+      student.socketId = "";
+
+      await this.redisService.hSet(
+        this.roomUsersKey(roomId),
+        studentId,
+        JSON.stringify(student),
+      );
 
       const students = await this.getRoomStudents(roomId);
       const leaderboard = await this.getLeaderboard(roomId);
 
       this.server.to(meta.teacherSocketId).emit("student-left", {
-        socketId: client.id,
-        username: client.data.username,
-        email: client.data.email,
+        id: studentId,
+        username: student.username,
+        email: student.email,
       });
-
       this.server.to(meta.teacherSocketId).emit("room-users", students);
       this.server.to(roomId).emit("leaderboard-updated", leaderboard);
-
-      // Quiz is over and the last student just left: nothing is left to
-      // show anyone, so clear the room now instead of waiting.
-      if (students.length === 0) {
-        const state = await this.redisService.getObject<TestState>(
-          this.testStateKey(roomId),
-        );
-
-        if (state?.status === "finished") {
-          await this.destroyRoom(roomId, meta.code);
-        }
-      }
     } catch (error) {
-      console.error("Remove student error:", error);
+      console.error("Student disconnect error:", error);
     }
   }
 
   // -----------------------------------------
-  // TEACHER DISCONNECTS
+  // TEACHER DISCONNECT: grace period before closing
   // -----------------------------------------
 
-  private async endTeacherRoom(client: Socket, roomId: string) {
+  private async onTeacherDisconnected(client: Socket, roomId: string) {
     try {
       const meta = await this.redisService.getObject<RoomMeta>(
         this.roomMetaKey(roomId),
@@ -1280,18 +1478,40 @@ export class CreateSocket
         this.testStateKey(roomId),
       );
 
-      // If the quiz already finished, students are looking at their final
-      // results. Don't kick them to "Room Closed", just clean up.
-      if (state?.status !== "finished") {
-        this.server.to(roomId).emit("room-ended", {
-          message: "The teacher disconnected. This room has been closed.",
-          roomId,
-        });
-      }
+      if (state?.status === "finished") return;
+
+      const old = this.teacherTimers.get(roomId);
+      if (old) clearTimeout(old);
+
+      this.teacherTimers.set(
+        roomId,
+        setTimeout(() => {
+          void this.closeRoomIfTeacherGone(roomId, client.id);
+        }, TEACHER_GRACE_MS),
+      );
+    } catch (error) {
+      console.error("Teacher disconnect error:", error);
+    }
+  }
+
+  private async closeRoomIfTeacherGone(roomId: string, oldSocketId: string) {
+    try {
+      this.teacherTimers.delete(roomId);
+
+      const meta = await this.redisService.getObject<RoomMeta>(
+        this.roomMetaKey(roomId),
+      );
+
+      if (!meta || meta.teacherSocketId !== oldSocketId) return;
+
+      this.server.to(roomId).emit("room-ended", {
+        message: "The teacher disconnected. This room has been closed.",
+        roomId,
+      });
 
       await this.destroyRoom(roomId, meta.code);
     } catch (error) {
-      console.error("End teacher room error:", error);
+      console.error("Close room error:", error);
     }
   }
 }
