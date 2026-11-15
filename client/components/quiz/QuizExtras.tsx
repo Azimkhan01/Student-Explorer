@@ -47,7 +47,7 @@ export function AvatarBadge({
   return (
     <span
       aria-hidden
-      className="flex shrink-0 items-center justify-center rounded-full bg-indigo-100 font-bold text-indigo-700 shadow-sm ring-2 ring-white"
+      className="flex shrink-0 items-center justify-center rounded-full bg-blue-400/20 font-bold text-blue-700 shadow-sm ring-2 ring-white"
       style={{ width: size, height: size, fontSize: size * 0.5 }}
     >
       {avatar || name.charAt(0).toUpperCase()}
@@ -81,8 +81,8 @@ export function AvatarPicker({
             onClick={() => onChange(a)}
             className={`flex h-12 items-center justify-center rounded-xl border text-2xl ${
               selected
-                ? "border-indigo-600 bg-indigo-50 ring-2 ring-indigo-300"
-                : "border-gray-200 bg-white hover:bg-gray-50"
+                ? "border-blue-600 bg-blue-500/10 ring-2 ring-blue-400/50"
+                : "border-gray-200 bg-white hover:border-blue-400 hover:bg-blue-500/5"
             }`}
           >
             {a}
@@ -136,11 +136,12 @@ export function QuizTimer({
   const ratio = total > 0 ? remaining / total : 0;
   const danger = !ended && remaining > 0 && remaining <= 5;
 
+  // blue-600 -> amber -> red as time runs out
   const color =
     ended || remaining === 0
       ? "#9ca3af"
       : ratio > 0.5
-        ? "#4f46e5"
+        ? "#2563eb"
         : ratio > 0.25
           ? "#f59e0b"
           : "#ef4444";
@@ -167,7 +168,7 @@ export function QuizTimer({
       aria-label={`${remaining} seconds remaining`}
     >
       <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
-        <circle cx="50" cy="50" r="45" fill="none" stroke="#e5e7eb" strokeWidth="8" />
+        <circle cx="50" cy="50" r="45" fill="none" stroke="#dbeafe" strokeWidth="8" />
         <motion.circle
           key={endsAt}
           cx="50"
@@ -235,13 +236,15 @@ export function AvatarLeaderboard({
               exit={{ opacity: 0, x: 30 }}
               transition={{ type: "spring", stiffness: 350, damping: 30 }}
               className={`relative overflow-hidden rounded-xl border ${
-                mine ? "border-indigo-400 bg-indigo-50" : "border-gray-200 bg-white"
+                mine
+                  ? "border-blue-500 bg-blue-500/10"
+                  : "border-gray-200 bg-white"
               }`}
             >
               <motion.div
                 aria-hidden
                 className={`absolute inset-y-0 left-0 ${
-                  mine ? "bg-indigo-100" : "bg-gray-50"
+                  mine ? "bg-blue-400/25" : "bg-blue-400/10"
                 }`}
                 initial={false}
                 animate={{ width: `${(e.score / topScore) * 100}%` }}
@@ -261,7 +264,7 @@ export function AvatarLeaderboard({
                   <p className="truncate font-semibold">
                     {e.username}
                     {mine && (
-                      <span className="ml-2 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                      <span className="ml-2 rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
                         You
                       </span>
                     )}
@@ -277,7 +280,7 @@ export function AvatarLeaderboard({
                     </p>
                   )}
                 </div>
-                <p className="text-lg font-extrabold text-indigo-600">
+                <p className="text-lg font-extrabold text-blue-600">
                   <AnimatedNumber value={e.score} />
                   <span className="ml-1 text-xs font-medium text-gray-400">pts</span>
                 </p>
@@ -349,7 +352,9 @@ export interface QuestionResult {
   status: QuestionResultStatus;
   selectedOptionIndex: number | null;
   responseTimeMs: number | null;
-  earnedMarks: number;
+  earnedMarks: number; // total points (base + speed bonus)
+  basePoints?: number;
+  bonusPoints?: number;
 }
 
 const RESULT_GROUPS = {
@@ -418,11 +423,11 @@ export function QuestionResultsPanel({
       initial={{ opacity: 0, y: 24 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ type: "spring", stiffness: 240, damping: 24 }}
-      className="rounded-2xl border bg-white p-5 shadow-sm sm:p-6"
+      className="rounded-2xl border border-blue-400/30 bg-white p-5 shadow-sm sm:p-6"
     >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xl font-bold">Question results</h2>
-        <span className="rounded-full bg-indigo-50 px-3 py-1 text-sm font-semibold text-indigo-700">
+        <h2 className="text-xl font-bold text-blue-700">Question results</h2>
+        <span className="rounded-full bg-blue-500/10 px-3 py-1 text-sm font-semibold text-blue-700">
           <AnimatedNumber value={grouped.correct.length} /> / {results.length} correct
         </span>
       </div>
@@ -452,14 +457,14 @@ export function QuestionResultsPanel({
               <div key={i} className="flex items-center gap-3 text-sm">
                 <span
                   className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                    isCorrect ? "bg-green-500 text-white" : "bg-gray-100 text-gray-600"
+                    isCorrect ? "bg-green-500 text-white" : "bg-blue-400/20 text-blue-700"
                   }`}
                 >
                   {String.fromCharCode(65 + i)}
                 </span>
                 <div className="relative h-6 flex-1 overflow-hidden rounded-md bg-gray-100">
                   <motion.div
-                    className={`h-full rounded-md ${isCorrect ? "bg-green-400" : "bg-indigo-300"}`}
+                    className={`h-full rounded-md ${isCorrect ? "bg-green-400" : "bg-blue-400"}`}
                     initial={{ width: 0 }}
                     animate={{ width: `${(votes / maxVotes) * 100}%` }}
                     transition={{
@@ -469,7 +474,7 @@ export function QuestionResultsPanel({
                       delay: 0.15 + i * 0.05,
                     }}
                   />
-                  <span className="absolute inset-y-0 left-2 flex max-w-[85%] items-center truncate text-xs font-medium text-gray-700">
+                  <span className="absolute inset-y-0 left-2 flex max-w-[85%] items-center truncate text-xs font-medium text-gray-800">
                     {option}
                   </span>
                 </div>
@@ -513,7 +518,10 @@ export function QuestionResultsPanel({
 
                   let detail = "no answer";
                   if (key === "correct") {
-                    detail = `${((r.responseTimeMs ?? 0) / 1000).toFixed(1)}s · +${r.earnedMarks}`;
+                    const bonus = r.bonusPoints ?? 0;
+                    detail = `${((r.responseTimeMs ?? 0) / 1000).toFixed(1)}s · +${r.earnedMarks}${
+                      bonus > 0 ? ` (⚡${bonus})` : ""
+                    }`;
                   } else if (key === "wrong" && r.selectedOptionIndex !== null) {
                     detail = `chose ${String.fromCharCode(65 + r.selectedOptionIndex)}`;
                   }
@@ -524,7 +532,7 @@ export function QuestionResultsPanel({
                       variants={chipVariants}
                       whileHover={{ scale: 1.04 }}
                       className={`flex items-center gap-2 rounded-full border py-1 pl-1 pr-3 text-sm ${group.chip} ${
-                        mine ? "ring-2 ring-indigo-400" : ""
+                        mine ? "ring-2 ring-blue-500" : ""
                       }`}
                     >
                       <AvatarBadge avatar={r.avatar} name={r.username} size={28} />
@@ -664,7 +672,7 @@ export function TeacherBroadcastLayer({
             transition={{ type: "spring", stiffness: 320, damping: 24 }}
             className="fixed inset-x-0 top-4 z-50 mx-auto w-[calc(100%-2rem)] max-w-lg"
           >
-            <div className="flex items-start gap-3 rounded-2xl bg-indigo-600 p-4 text-white shadow-2xl ring-4 ring-indigo-200">
+            <div className="flex items-start gap-3 rounded-2xl bg-blue-600 p-4 text-white shadow-2xl ring-4 ring-blue-400/40">
               <motion.span
                 aria-hidden
                 className="text-2xl"
@@ -674,7 +682,7 @@ export function TeacherBroadcastLayer({
                 📢
               </motion.span>
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold uppercase tracking-wide text-indigo-200">
+                <p className="text-xs font-semibold uppercase tracking-wide text-blue-100">
                   Message from the teacher
                 </p>
                 <p className="break-words font-semibold">{message.text}</p>
@@ -683,7 +691,7 @@ export function TeacherBroadcastLayer({
                 type="button"
                 onClick={onDismissMessage}
                 aria-label="Dismiss message"
-                className="rounded-md px-2 py-1 text-indigo-200 hover:bg-indigo-500 hover:text-white"
+                className="rounded-md px-2 py-1 text-blue-100 hover:bg-blue-500 hover:text-white"
               >
                 ✕
               </button>

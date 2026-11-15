@@ -45,12 +45,12 @@ export function AnimatedNumber({
 // Confetti burst (skipped when the user prefers reduced motion)
 // ------------------------------------------------------------
 const CONFETTI_COLORS = [
-  "#6366f1",
+  "#60a5fa", // blue-400
+  "#3b82f6", // blue-500
+  "#2563eb", // blue-600
+  "#1d4ed8", // blue-700
   "#f59e0b",
   "#10b981",
-  "#ef4444",
-  "#3b82f6",
-  "#ec4899",
 ];
 
 export function Confetti({ count = 56 }: { count?: number }) {

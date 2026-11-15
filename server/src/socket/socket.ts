@@ -26,6 +26,20 @@ const ROOM_TTL_SECONDS = 6 * 60 * 60; // safety net
 const FINISHED_GRACE_MS = 10 * 60 * 1000; // keep results after the quiz ends
 const TEACHER_GRACE_MS = 60 * 1000; // teacher may reconnect within this time
 
+// ---------------- AUTO NEXT QUESTION ----------------
+const AUTO_NEXT_MIN_SECONDS = 2;
+const AUTO_NEXT_MAX_SECONDS = 60;
+const AUTO_NEXT_DEFAULT_SECONDS = 5;
+// ---------------- END EARLY WHEN EVERYONE ANSWERED ----------------
+const ALL_ANSWERED_DELAY_MS = 1000;
+
+// ---------------- SCORING ----------------
+// Base points for a correct answer = marks * POINTS_PER_MARK.
+// Speed bonus = up to MAX_SPEED_BONUS_RATIO * base, decreasing linearly
+// from "instant answer" (full bonus) to "answered at the buzzer" (no bonus).
+const POINTS_PER_MARK = 100;
+const MAX_SPEED_BONUS_RATIO = 0.5;
+
 interface Question {
   id?: string;
   question: string;
@@ -61,6 +75,13 @@ interface TestState {
   questionStartedAt: number | null;
   questionEndsAt: number | null;
   durationSeconds: number;
+  // pause support (only meaningful while status === "running")
+  paused: boolean;
+  pausedRemainingMs: number | null;
+  // auto next question
+  autoNext: boolean;
+  autoNextDelaySeconds: number;
+  autoNextAt: number | null; // when the next question will start automatically
 }
 
 interface QuizData {
@@ -74,7 +95,9 @@ interface QuestionResult {
   status: "correct" | "wrong" | "unanswered";
   selectedOptionIndex: number | null;
   responseTimeMs: number | null;
-  earnedMarks: number;
+  earnedMarks: number; // total points earned (base + speed bonus)
+  basePoints: number;
+  bonusPoints: number;
 }
 
 interface LastResult {
@@ -111,6 +134,7 @@ export class CreateSocket
   private questionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private teacherTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private autoNextTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastBroadcastAt = new Map<string, number>();
 
   constructor(private readonly redisService: RedisService) {}
@@ -146,6 +170,9 @@ export class CreateSocket
   private finishLockKey(roomId: string, questionIndex: number) {
     return `quickzy-room:${roomId}:lock:${questionIndex}`;
   }
+  private startLockKey(roomId: string, questionIndex: number) {
+    return `quickzy-room:${roomId}:start-lock:${questionIndex}`;
+  }
   private roomPattern(roomId: string) {
     const safe = roomId.replace(/[\\*?[\]]/g, "\\$&");
     return `quickzy-room:${safe}:*`;
@@ -178,11 +205,13 @@ export class CreateSocket
     );
   }
 
+  // Deletes EVERYTHING that belongs to a room (redis + timers).
   private async destroyRoom(roomId: string, knownCode?: number) {
     for (const map of [
       this.questionTimers,
       this.cleanupTimers,
       this.teacherTimers,
+      this.autoNextTimers,
     ]) {
       const t = map.get(roomId);
       if (t) clearTimeout(t);
@@ -223,13 +252,114 @@ export class CreateSocket
     return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
+  // marks must be a positive number, otherwise fall back to 1
+  private normalizeMarks(marks: unknown) {
+    const n = Number(marks);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+
+  private clampAutoDelay(value: unknown) {
+    const n = Math.round(Number(value));
+    if (!Number.isFinite(n)) return AUTO_NEXT_DEFAULT_SECONDS;
+    return Math.min(AUTO_NEXT_MAX_SECONDS, Math.max(AUTO_NEXT_MIN_SECONDS, n));
+  }
+
+  // Accepts 0-based index (number or numeric string) OR the option text.
+  // Returns -1 when it can't be resolved.
+  private resolveCorrectIndex(q: Question): number {
+    const ca = q.correct_answer;
+    if (typeof ca === "number" && Number.isInteger(ca)) return ca;
+    if (typeof ca === "string") {
+      const t = ca.trim();
+      if (/^\d+$/.test(t)) return Number(t);
+      return q.options.findIndex((o) => o === ca);
+    }
+    return -1;
+  }
+
+  // Base points + speed bonus. Faster correct answers earn more.
+  private calcPoints(
+    marks: number,
+    responseTimeMs: number,
+    durationSeconds: number,
+  ) {
+    const basePoints = Math.round(marks * POINTS_PER_MARK);
+    const totalMs = durationSeconds * 1000;
+    const ratio =
+      totalMs > 0
+        ? Math.min(1, Math.max(0, 1 - responseTimeMs / totalMs))
+        : 0;
+    const bonusPoints = Math.round(basePoints * MAX_SPEED_BONUS_RATIO * ratio);
+    return { basePoints, bonusPoints, total: basePoints + bonusPoints };
+  }
+
   private toSafeQuestion(question: Question) {
+    const basePoints = Math.round(
+      this.normalizeMarks(question.marks) * POINTS_PER_MARK,
+    );
     return {
       id: question.id,
       question: question.question,
       options: question.options,
       marks: question.marks,
+      basePoints,
+      maxBonusPoints: Math.round(basePoints * MAX_SPEED_BONUS_RATIO),
     };
+  }
+
+  private buildQuestionPayload(state: TestState, questions: Question[]) {
+    const question = questions[state.currentQuestionIndex];
+    if (!question) return null;
+
+    return {
+      question: this.toSafeQuestion(question),
+      questionIndex: state.currentQuestionIndex,
+      totalQuestions: questions.length,
+      durationSeconds: state.durationSeconds,
+      startedAt: state.questionStartedAt,
+      endsAt: state.questionEndsAt,
+      serverNow: Date.now(),
+    };
+  }
+
+  private emitToStudent(student: Student, event: string, data: unknown) {
+    if (!student.socketId) return; // offline: they get a replay on reconnect
+    this.server.to(student.socketId).emit(event, data);
+  }
+
+  // Resolves the room of a TEACHER socket and verifies it is the CURRENT
+  // teacher socket of that room. Returns null when it is not allowed.
+  private async getTeacherContext(client: Socket) {
+    if (client.data.role !== "teacher" || !client.data.roomId) return null;
+
+    const roomId = client.data.roomId as string;
+    const meta = await this.redisService.getObject<RoomMeta>(
+      this.roomMetaKey(roomId),
+    );
+
+    if (!meta || meta.teacherSocketId !== client.id) return null;
+    return { roomId, meta };
+  }
+
+  private armQuestionTimer(
+    roomId: string,
+    questionIndex: number,
+    delayMs: number,
+  ) {
+    const existing = this.questionTimers.get(roomId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      void this.finishQuestion(roomId, questionIndex, { fromTimer: true });
+    }, Math.max(0, delayMs));
+
+    this.questionTimers.set(roomId, timer);
+  }
+
+  private cancelAutoNext(roomId: string) {
+    const t = this.autoNextTimers.get(roomId);
+    if (t) clearTimeout(t);
+    this.autoNextTimers.delete(roomId);
   }
 
   // -----------------------------------------
@@ -293,6 +423,36 @@ export class CreateSocket
         return;
       }
 
+      // Validate + normalise every question (correct_answer becomes an index).
+      const questions: Question[] = [];
+      for (const q of payload.questions) {
+        if (
+          !q ||
+          typeof q.question !== "string" ||
+          !Array.isArray(q.options) ||
+          q.options.length < 2
+        ) {
+          client.emit("room-error", {
+            message: "One of the questions is invalid.",
+          });
+          return;
+        }
+
+        const correctIndex = this.resolveCorrectIndex(q);
+        if (correctIndex < 0 || correctIndex >= q.options.length) {
+          client.emit("room-error", {
+            message: "A question has no valid correct answer.",
+          });
+          return;
+        }
+
+        questions.push({
+          ...q,
+          correct_answer: correctIndex,
+          marks: this.normalizeMarks(q.marks),
+        });
+      }
+
       const codeKey = this.roomCodeKey(payload.code);
 
       const teacherId = String(payload.teacher_id);
@@ -314,6 +474,11 @@ export class CreateSocket
         questionStartedAt: null,
         questionEndsAt: null,
         durationSeconds: 20,
+        paused: false,
+        pausedRemainingMs: null,
+        autoNext: false,
+        autoNextDelaySeconds: AUTO_NEXT_DEFAULT_SECONDS,
+        autoNextAt: null,
       };
 
       const claimed = await this.redisService.setNx(
@@ -341,7 +506,7 @@ export class CreateSocket
       );
       await this.redisService.setObject(
         this.quizKey(roomId),
-        { questions: payload.questions },
+        { questions },
         ROOM_TTL_SECONDS,
       );
       await this.redisService.setObject(
@@ -442,6 +607,10 @@ export class CreateSocket
         code: meta.code,
         status: state.status,
         durationSeconds: state.durationSeconds,
+        paused: state.paused,
+        pausedRemainingMs: state.pausedRemainingMs,
+        autoNext: state.autoNext,
+        autoNextDelaySeconds: state.autoNextDelaySeconds,
         students,
         leaderboard,
         answeredIds,
@@ -634,7 +803,10 @@ export class CreateSocket
         JSON.stringify(student),
       );
 
-      await this.touchRoom(roomId, meta.code);
+      // Don't extend TTL of a finished room (it has its own cleanup timer).
+      if (state.status !== "finished") {
+        await this.touchRoom(roomId, meta.code);
+      }
 
       const students = await this.getRoomStudents(roomId);
 
@@ -681,6 +853,14 @@ export class CreateSocket
     if (state.status === "running") {
       this.emitQuestionToClient(client, state, quiz.questions);
 
+      if (state.paused) {
+        client.emit("test-paused", {
+          questionIndex: state.currentQuestionIndex,
+          remainingMs: state.pausedRemainingMs ?? 0,
+          serverNow: Date.now(),
+        });
+      }
+
       if (studentId) {
         const raw = await this.redisService.hGet(
           this.answersKey(roomId, state.currentQuestionIndex),
@@ -708,7 +888,9 @@ export class CreateSocket
         this.lastResultKey(roomId),
       );
 
-      if (last) {
+      // Only replay if the stored result belongs to THIS question
+      // (scoring may still be in progress for the current one).
+      if (last && last.questionIndex === state.currentQuestionIndex) {
         const leaderboard = await this.getLeaderboard(roomId);
         client.emit("question-ended", { ...last, leaderboard });
 
@@ -721,10 +903,28 @@ export class CreateSocket
             answered: mine.status !== "unanswered",
             isCorrect: mine.status === "correct",
             earnedMarks: mine.earnedMarks,
+            basePoints: mine.basePoints,
+            bonusPoints: mine.bonusPoints,
             selectedOptionIndex: mine.selectedOptionIndex,
             responseTimeMs: mine.responseTimeMs,
           });
         }
+      }
+
+      // An auto-advance countdown is still running: show it again.
+      if (
+        state.autoNext &&
+        state.autoNextAt &&
+        state.autoNextAt > Date.now()
+      ) {
+        const nextIndex = state.currentQuestionIndex + 1;
+        client.emit("auto-next-scheduled", {
+          nextAt: state.autoNextAt,
+          serverNow: Date.now(),
+          delaySeconds: state.autoNextDelaySeconds,
+          nextQuestionIndex: nextIndex,
+          isLast: nextIndex >= quiz.questions.length,
+        });
       }
       return;
     }
@@ -744,7 +944,12 @@ export class CreateSocket
 
   @SubscribeMessage("start-test")
   async startTest(
-    @MessageBody() payload: { durationSeconds?: number },
+    @MessageBody()
+    payload: {
+      durationSeconds?: number;
+      autoNext?: boolean;
+      autoNextDelaySeconds?: number;
+    },
     @ConnectedSocket() client: Socket,
   ) {
     try {
@@ -774,9 +979,15 @@ export class CreateSocket
         Math.max(5, Number(payload?.durationSeconds) || 20),
       );
 
+      const autoNext = payload?.autoNext === true;
+      const autoNextDelaySeconds =
+        payload?.autoNextDelaySeconds !== undefined
+          ? this.clampAutoDelay(payload.autoNextDelaySeconds)
+          : state.autoNextDelaySeconds;
+
       await this.redisService.setObject(
         this.testStateKey(roomId),
-        { ...state, durationSeconds },
+        { ...state, durationSeconds, autoNext, autoNextDelaySeconds },
         ROOM_TTL_SECONDS,
       );
 
@@ -784,6 +995,234 @@ export class CreateSocket
     } catch (error) {
       console.error("Start test error:", error);
       client.emit("test-error", { message: "Unable to start the test." });
+    }
+  }
+
+  // -----------------------------------------
+  // TEACHER: PAUSE / RESUME THE CURRENT QUESTION
+  // -----------------------------------------
+
+  @SubscribeMessage("pause-test")
+  async pauseTest(@ConnectedSocket() client: Socket) {
+    try {
+      const ctx = await this.getTeacherContext(client);
+      if (!ctx) return;
+      const { roomId } = ctx;
+
+      const state = await this.redisService.getObject<TestState>(
+        this.testStateKey(roomId),
+      );
+
+      if (!state || state.status !== "running" || state.paused) return;
+
+      const remainingMs = Math.max(
+        0,
+        (state.questionEndsAt ?? 0) - Date.now(),
+      );
+
+      if (remainingMs <= 0) {
+        client.emit("test-error", {
+          message: "Time is up for this question.",
+        });
+        return;
+      }
+
+      // Stop the countdown: nobody can be scored while we are paused.
+      const timer = this.questionTimers.get(roomId);
+      if (timer) clearTimeout(timer);
+      this.questionTimers.delete(roomId);
+
+      await this.redisService.setObject(
+        this.testStateKey(roomId),
+        { ...state, paused: true, pausedRemainingMs: remainingMs },
+        ROOM_TTL_SECONDS,
+      );
+
+      this.server.to(roomId).emit("test-paused", {
+        questionIndex: state.currentQuestionIndex,
+        remainingMs,
+        serverNow: Date.now(),
+      });
+    } catch (error) {
+      console.error("Pause test error:", error);
+      client.emit("test-error", { message: "Unable to pause the test." });
+    }
+  }
+
+  @SubscribeMessage("resume-test")
+  async resumeTest(@ConnectedSocket() client: Socket) {
+    try {
+      const ctx = await this.getTeacherContext(client);
+      if (!ctx) return;
+      const { roomId } = ctx;
+
+      const state = await this.redisService.getObject<TestState>(
+        this.testStateKey(roomId),
+      );
+      const quiz = await this.redisService.getObject<QuizData>(
+        this.quizKey(roomId),
+      );
+
+      if (!state || !quiz || state.status !== "running" || !state.paused) {
+        return;
+      }
+
+      const remainingMs = Math.max(0, state.pausedRemainingMs ?? 0);
+      const now = Date.now();
+      const endsAt = now + remainingMs;
+      // Shift the start so (now - startedAt) only counts time NOT paused.
+      // This keeps the speed bonus fair.
+      const startedAt = endsAt - state.durationSeconds * 1000;
+
+      const nextState: TestState = {
+        ...state,
+        paused: false,
+        pausedRemainingMs: null,
+        questionStartedAt: startedAt,
+        questionEndsAt: endsAt,
+      };
+
+      await this.redisService.setObject(
+        this.testStateKey(roomId),
+        nextState,
+        ROOM_TTL_SECONDS,
+      );
+
+      const payload = this.buildQuestionPayload(nextState, quiz.questions);
+      if (payload) this.server.to(roomId).emit("question-started", payload);
+
+      this.server.to(roomId).emit("test-resumed", {
+        questionIndex: state.currentQuestionIndex,
+        endsAt,
+        serverNow: Date.now(),
+      });
+
+      this.armQuestionTimer(roomId, state.currentQuestionIndex, remainingMs);
+    } catch (error) {
+      console.error("Resume test error:", error);
+      client.emit("test-error", { message: "Unable to resume the test." });
+    }
+  }
+
+  // -----------------------------------------
+  // TEACHER: CHANGE FLOW SETTINGS (auto next question) AT ANY TIME
+  // -----------------------------------------
+
+  @SubscribeMessage("update-settings")
+  async updateSettings(
+    @MessageBody()
+    payload: { autoNext?: boolean; autoNextDelaySeconds?: number },
+    @ConnectedSocket() client: Socket,
+  ) {
+    try {
+      const ctx = await this.getTeacherContext(client);
+      if (!ctx) return;
+      const { roomId } = ctx;
+
+      const state = await this.redisService.getObject<TestState>(
+        this.testStateKey(roomId),
+      );
+      if (!state) return;
+
+      const autoNext =
+        typeof payload?.autoNext === "boolean"
+          ? payload.autoNext
+          : state.autoNext;
+      const delay =
+        payload?.autoNextDelaySeconds !== undefined
+          ? this.clampAutoDelay(payload.autoNextDelaySeconds)
+          : state.autoNextDelaySeconds;
+
+      const nextState: TestState = {
+        ...state,
+        autoNext,
+        autoNextDelaySeconds: delay,
+        autoNextAt: autoNext ? state.autoNextAt : null,
+      };
+
+      await this.redisService.setObject(
+        this.testStateKey(roomId),
+        nextState,
+        ROOM_TTL_SECONDS,
+      );
+
+      if (state.status === "question-ended") {
+        if (!autoNext) {
+          // Teacher turned auto-next off while a countdown was running.
+          if (this.autoNextTimers.has(roomId) || state.autoNextAt) {
+            this.cancelAutoNext(roomId);
+            this.server.to(roomId).emit("auto-next-cancelled", {});
+          }
+        } else if (
+          !state.autoNext ||
+          delay !== state.autoNextDelaySeconds ||
+          !this.autoNextTimers.has(roomId)
+        ) {
+          await this.scheduleAutoNext(
+            roomId,
+            state.currentQuestionIndex + 1,
+            delay,
+          );
+        }
+      }
+
+      client.emit("settings-updated", {
+        autoNext,
+        autoNextDelaySeconds: delay,
+      });
+    } catch (error) {
+      console.error("Update settings error:", error);
+      client.emit("test-error", { message: "Unable to update the settings." });
+    }
+  }
+
+  // -----------------------------------------
+  // TEACHER: END THE QUIZ (deletes everything)
+  // -----------------------------------------
+
+  @SubscribeMessage("end-quiz")
+  async endQuiz(@ConnectedSocket() client: Socket) {
+    try {
+      const ctx = await this.getTeacherContext(client);
+      if (!ctx) {
+        client.emit("test-error", {
+          message: "Only the teacher of this room can end the quiz.",
+        });
+        return;
+      }
+
+      const { roomId, meta } = ctx;
+
+      const state = await this.redisService.getObject<TestState>(
+        this.testStateKey(roomId),
+      );
+
+      // Students already looking at their final results keep that screen.
+      if (state?.status !== "finished") {
+        client.to(roomId).emit("room-ended", {
+          message: "The teacher ended this quiz.",
+          reason: "ended-by-teacher",
+          roomId,
+        });
+      }
+
+      // Timers + every redis key of this room + the room code.
+      await this.destroyRoom(roomId, meta.code);
+
+      // Detach every socket from the (now dead) room.
+      this.server.in(roomId).socketsLeave(roomId);
+
+      client.data.roomId = undefined;
+
+      client.emit("quiz-ended", {
+        roomId,
+        message: "The quiz was ended and all its data was deleted.",
+      });
+
+      console.log("Quiz ended by teacher:", roomId);
+    } catch (error) {
+      console.error("End quiz error:", error);
+      client.emit("test-error", { message: "Unable to end the quiz." });
     }
   }
 
@@ -899,13 +1338,15 @@ export class CreateSocket
         answeredCount = await this.redisService.hLen(answerKey);
       }
 
-      const targets = await this.server.in(student.socketId).fetchSockets();
+      if (student.socketId) {
+        const targets = await this.server.in(student.socketId).fetchSockets();
 
-      for (const target of targets) {
-        target.emit("removed-from-room", {
-          message: "The teacher removed you from this quiz.",
-        });
-        target.leave(roomId);
+        for (const target of targets) {
+          target.emit("removed-from-room", {
+            message: "The teacher removed you from this quiz.",
+          });
+          target.leave(roomId);
+        }
       }
 
       const students = await this.getRoomStudents(roomId);
@@ -932,24 +1373,36 @@ export class CreateSocket
   // -----------------------------------------
 
   private async startQuestion(roomId: string, questionIndex: number) {
+    // A manual "next" or an auto-advance always replaces any pending countdown.
+    this.cancelAutoNext(roomId);
+
     const quiz = await this.redisService.getObject<QuizData>(
       this.quizKey(roomId),
     );
     const state = await this.redisService.getObject<TestState>(
       this.testStateKey(roomId),
     );
+
+    // Room was deleted (e.g. quiz ended) or already finished.
+    if (!quiz || !state || state.status === "finished") return;
+
+    // Idempotent: a double-click on start / next can't start it twice.
+    const gotLock = await this.redisService.setNx(
+      this.startLockKey(roomId, questionIndex),
+      "1",
+      ROOM_TTL_SECONDS,
+    );
+    if (!gotLock) return;
+
     const meta = await this.redisService.getObject<RoomMeta>(
       this.roomMetaKey(roomId),
     );
-
-    if (!quiz || !state) return;
 
     if (questionIndex >= quiz.questions.length) {
       await this.finishTest(roomId);
       return;
     }
 
-    const question = quiz.questions[questionIndex];
     const startedAt = Date.now();
     const endsAt = startedAt + state.durationSeconds * 1000;
 
@@ -959,6 +1412,9 @@ export class CreateSocket
       currentQuestionIndex: questionIndex,
       questionStartedAt: startedAt,
       questionEndsAt: endsAt,
+      paused: false,
+      pausedRemainingMs: null,
+      autoNextAt: null,
     };
 
     await this.redisService.setObject(
@@ -971,24 +1427,10 @@ export class CreateSocket
 
     await this.redisService.delete(this.answersKey(roomId, questionIndex));
 
-    this.server.to(roomId).emit("question-started", {
-      question: this.toSafeQuestion(question),
-      questionIndex,
-      totalQuestions: quiz.questions.length,
-      durationSeconds: state.durationSeconds,
-      startedAt,
-      endsAt,
-      serverNow: Date.now(),
-    });
+    const payload = this.buildQuestionPayload(nextState, quiz.questions);
+    if (payload) this.server.to(roomId).emit("question-started", payload);
 
-    const existingTimer = this.questionTimers.get(roomId);
-    if (existingTimer) clearTimeout(existingTimer);
-
-    const timer = setTimeout(() => {
-      void this.finishQuestion(roomId, questionIndex);
-    }, Math.max(0, endsAt - Date.now()));
-
-    this.questionTimers.set(roomId, timer);
+    this.armQuestionTimer(roomId, questionIndex, endsAt - Date.now());
   }
 
   private emitQuestionToClient(
@@ -996,18 +1438,76 @@ export class CreateSocket
     state: TestState,
     questions: Question[],
   ) {
-    const question = questions[state.currentQuestionIndex];
-    if (!question) return;
+    const payload = this.buildQuestionPayload(state, questions);
+    if (!payload) return;
+    client.emit("question-started", payload);
+  }
 
-    client.emit("question-started", {
-      question: this.toSafeQuestion(question),
-      questionIndex: state.currentQuestionIndex,
-      totalQuestions: questions.length,
-      durationSeconds: state.durationSeconds,
-      startedAt: state.questionStartedAt,
-      endsAt: state.questionEndsAt,
+  // -----------------------------------------
+  // AUTO NEXT QUESTION
+  // -----------------------------------------
+
+  private async scheduleAutoNext(
+    roomId: string,
+    nextIndex: number,
+    delaySeconds: number,
+  ) {
+    this.cancelAutoNext(roomId);
+
+    const state = await this.redisService.getObject<TestState>(
+      this.testStateKey(roomId),
+    );
+    const quiz = await this.redisService.getObject<QuizData>(
+      this.quizKey(roomId),
+    );
+
+    if (!state || !quiz || state.status !== "question-ended") return;
+
+    const delayMs = delaySeconds * 1000;
+    const nextAt = Date.now() + delayMs;
+
+    await this.redisService.setObject(
+      this.testStateKey(roomId),
+      { ...state, autoNextAt: nextAt },
+      ROOM_TTL_SECONDS,
+    );
+
+    this.server.to(roomId).emit("auto-next-scheduled", {
+      nextAt,
       serverNow: Date.now(),
+      delaySeconds,
+      nextQuestionIndex: nextIndex,
+      isLast: nextIndex >= quiz.questions.length,
     });
+
+    this.cancelAutoNext(roomId); // in case two calls overlapped
+    const timer = setTimeout(() => {
+      this.autoNextTimers.delete(roomId);
+      void this.autoAdvance(roomId, nextIndex);
+    }, delayMs);
+
+    this.autoNextTimers.set(roomId, timer);
+  }
+
+  private async autoAdvance(roomId: string, nextIndex: number) {
+    try {
+      const state = await this.redisService.getObject<TestState>(
+        this.testStateKey(roomId),
+      );
+
+      if (
+        !state ||
+        state.status !== "question-ended" ||
+        !state.autoNext ||
+        state.currentQuestionIndex + 1 !== nextIndex
+      ) {
+        return;
+      }
+
+      await this.startQuestion(roomId, nextIndex);
+    } catch (error) {
+      console.error("Auto advance error:", error);
+    }
   }
 
   // -----------------------------------------
@@ -1038,6 +1538,13 @@ export class CreateSocket
       if (!state || !quiz || state.status !== "running") {
         client.emit("answer-error", {
           message: "This question is no longer accepting answers.",
+        });
+        return;
+      }
+
+      if (state.paused) {
+        client.emit("answer-error", {
+          message: "The quiz is paused. Wait for the teacher to resume.",
         });
         return;
       }
@@ -1080,6 +1587,7 @@ export class CreateSocket
         return;
       }
 
+      // Server-side clock only: the client can't fake a faster time.
       const responseTimeMs = Math.max(
         0,
         Date.now() - (state.questionStartedAt ?? Date.now()),
@@ -1126,14 +1634,11 @@ export class CreateSocket
   // FINISH QUESTION (scoring + reveal only here)
   // -----------------------------------------
 
-  private async finishQuestion(roomId: string, questionIndex: number) {
-    const gotLock = await this.redisService.setNx(
-      this.finishLockKey(roomId, questionIndex),
-      "1",
-      ROOM_TTL_SECONDS,
-    );
-    if (!gotLock) return;
-
+  private async finishQuestion(
+    roomId: string,
+    questionIndex: number,
+    opts?: { fromTimer?: boolean },
+  ) {
     const state = await this.redisService.getObject<TestState>(
       this.testStateKey(roomId),
     );
@@ -1150,17 +1655,35 @@ export class CreateSocket
       return;
     }
 
+    // A timer that fired just as the teacher paused must not end the question.
+    if (opts?.fromTimer && state.paused) return;
+
+    // Only one finisher wins (timer vs teacher "end question").
+    const gotLock = await this.redisService.setNx(
+      this.finishLockKey(roomId, questionIndex),
+      "1",
+      ROOM_TTL_SECONDS,
+    );
+    if (!gotLock) return;
+
     const timer = this.questionTimers.get(roomId);
     if (timer) clearTimeout(timer);
     this.questionTimers.delete(roomId);
 
     const question = quiz.questions[questionIndex];
     const correctOptionIndex = Number(question.correct_answer);
-    const marks = Number(question.marks) || 0;
+    const marks = this.normalizeMarks(question.marks);
+    const durationSeconds = state.durationSeconds;
 
     await this.redisService.setObject(
       this.testStateKey(roomId),
-      { ...state, status: "question-ended" },
+      {
+        ...state,
+        status: "question-ended",
+        paused: false,
+        pausedRemainingMs: null,
+        autoNextAt: null,
+      } as TestState,
       ROOM_TTL_SECONDS,
     );
 
@@ -1185,12 +1708,16 @@ export class CreateSocket
             selectedOptionIndex: null,
             responseTimeMs: null,
             earnedMarks: 0,
+            basePoints: 0,
+            bonusPoints: 0,
           });
 
-          this.server.to(student.socketId).emit("answer-result", {
+          this.emitToStudent(student, "answer-result", {
             answered: false,
             isCorrect: false,
             earnedMarks: 0,
+            basePoints: 0,
+            bonusPoints: 0,
             selectedOptionIndex: null,
             responseTimeMs: null,
           });
@@ -1203,7 +1730,11 @@ export class CreateSocket
         };
 
         const isCorrect = answer.selectedOptionIndex === correctOptionIndex;
-        const earnedMarks = isCorrect ? marks : 0;
+
+        // Correct answers earn base + speed bonus. Wrong earn nothing.
+        const pts = isCorrect
+          ? this.calcPoints(marks, answer.responseTimeMs, durationSeconds)
+          : { basePoints: 0, bonusPoints: 0, total: 0 };
 
         if (distribution[answer.selectedOptionIndex] !== undefined) {
           distribution[answer.selectedOptionIndex] += 1;
@@ -1216,10 +1747,12 @@ export class CreateSocket
           status: isCorrect ? "correct" : "wrong",
           selectedOptionIndex: answer.selectedOptionIndex,
           responseTimeMs: answer.responseTimeMs,
-          earnedMarks,
+          earnedMarks: pts.total,
+          basePoints: pts.basePoints,
+          bonusPoints: pts.bonusPoints,
         });
 
-        student.score += earnedMarks;
+        student.score += pts.total;
         student.totalTimeMs += answer.responseTimeMs;
         student.answeredQuestions += 1;
 
@@ -1229,10 +1762,12 @@ export class CreateSocket
           JSON.stringify(student),
         );
 
-        this.server.to(student.socketId).emit("answer-result", {
+        this.emitToStudent(student, "answer-result", {
           answered: true,
           isCorrect,
-          earnedMarks,
+          earnedMarks: pts.total,
+          basePoints: pts.basePoints,
+          bonusPoints: pts.bonusPoints,
           selectedOptionIndex: answer.selectedOptionIndex,
           responseTimeMs: answer.responseTimeMs,
         });
@@ -1272,6 +1807,19 @@ export class CreateSocket
     });
 
     this.server.to(roomId).emit("leaderboard-updated", leaderboard);
+
+    // Auto next question (the teacher may have toggled it while we scored).
+    const fresh = await this.redisService.getObject<TestState>(
+      this.testStateKey(roomId),
+    );
+
+    if (fresh && fresh.status === "question-ended" && fresh.autoNext) {
+      await this.scheduleAutoNext(
+        roomId,
+        questionIndex + 1,
+        fresh.autoNextDelaySeconds,
+      );
+    }
   }
 
   // -----------------------------------------
@@ -1290,6 +1838,7 @@ export class CreateSocket
 
       if (!state || state.status !== "running") return;
 
+      // Works while paused too.
       await this.finishQuestion(roomId, state.currentQuestionIndex);
     } catch (error) {
       console.error("End question error:", error);
@@ -1315,6 +1864,7 @@ export class CreateSocket
         return;
       }
 
+      // Skips the auto-next wait if one is running.
       await this.startQuestion(roomId, state.currentQuestionIndex + 1);
     } catch (error) {
       console.error("Next question error:", error);
@@ -1359,6 +1909,7 @@ export class CreateSocket
     const timer = this.questionTimers.get(roomId);
     if (timer) clearTimeout(timer);
     this.questionTimers.delete(roomId);
+    this.cancelAutoNext(roomId);
 
     const state = await this.redisService.getObject<TestState>(
       this.testStateKey(roomId),
@@ -1377,7 +1928,10 @@ export class CreateSocket
         status: "finished",
         questionStartedAt: null,
         questionEndsAt: null,
-      },
+        paused: false,
+        pausedRemainingMs: null,
+        autoNextAt: null,
+      } as TestState,
       ROOM_TTL_SECONDS,
     );
 
@@ -1435,9 +1989,8 @@ export class CreateSocket
       // The student already reconnected on a newer socket. Ignore this old one.
       if (student.socketId !== client.id) return;
 
-      // IMPORTANT: keep the record even in the lobby so a quick reconnect
-      // (or page reload) re-attaches to the same row instead of starting
-      // from scratch. Mark offline and clear the socket id.
+      // Keep the record even in the lobby so a quick reconnect
+      // (or page reload) re-attaches to the same row.
       student.connected = false;
       student.socketId = "";
 
@@ -1506,10 +2059,12 @@ export class CreateSocket
 
       this.server.to(roomId).emit("room-ended", {
         message: "The teacher disconnected. This room has been closed.",
+        reason: "teacher-disconnected",
         roomId,
       });
 
       await this.destroyRoom(roomId, meta.code);
+      this.server.in(roomId).socketsLeave(roomId);
     } catch (error) {
       console.error("Close room error:", error);
     }

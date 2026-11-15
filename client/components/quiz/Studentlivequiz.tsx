@@ -25,6 +25,8 @@ interface LiveQuestion {
     question: string;
     options: string[];
     marks: number;
+    basePoints?: number;
+    maxBonusPoints?: number;
   };
   questionIndex: number;
   totalQuestions: number;
@@ -37,7 +39,9 @@ interface LiveQuestion {
 interface AnswerResult {
   answered: boolean;
   isCorrect: boolean;
-  earnedMarks: number;
+  earnedMarks: number; // total points (base + speed bonus)
+  basePoints?: number;
+  bonusPoints?: number;
   selectedOptionIndex: number | null;
   responseTimeMs: number | null;
 }
@@ -68,7 +72,7 @@ const optionItem = {
 };
 
 const toneClass = {
-  info: "bg-indigo-50 text-indigo-700",
+  info: "bg-blue-500/10 text-blue-700",
   success: "bg-green-50 text-green-700",
   error: "bg-red-50 text-red-700",
   warn: "bg-amber-50 text-amber-700",
@@ -106,18 +110,83 @@ function saveSession(code: string, email: string, session: PersistedSession) {
   }
 }
 
+function clearSession(code: string, email: string) {
+  try {
+    localStorage.removeItem(storageKey(code, email));
+  } catch {
+    /* ignore */
+  }
+}
+
 function Spinner({ label }: { label: string }) {
   return (
     <main className="flex min-h-screen items-center justify-center">
       <div className="text-center">
         <motion.div
-          className="mx-auto mb-4 h-10 w-10 rounded-full border-4 border-indigo-500 border-t-transparent"
+          className="mx-auto mb-4 h-10 w-10 rounded-full border-4 border-blue-500 border-t-transparent"
           animate={{ rotate: 360 }}
           transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
         />
         <p>{label}</p>
       </div>
     </main>
+  );
+}
+
+// Static, frozen timer shown while the teacher has paused the quiz.
+function PausedClock({
+  remaining,
+  total,
+  size = 84,
+}: {
+  remaining: number;
+  total: number;
+  size?: number;
+}) {
+  const ratio = total > 0 ? Math.min(1, Math.max(0, remaining / total)) : 0;
+  const circumference = 2 * Math.PI * 45;
+
+  return (
+    <div
+      className="relative shrink-0"
+      style={{ width: size, height: size }}
+      role="timer"
+      aria-label={`Paused with ${remaining} seconds remaining`}
+    >
+      <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
+        <circle
+          cx="50"
+          cy="50"
+          r="45"
+          fill="none"
+          stroke="#fef3c7"
+          strokeWidth="8"
+        />
+        <circle
+          cx="50"
+          cy="50"
+          r="45"
+          fill="none"
+          stroke="#f59e0b"
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - ratio)}
+        />
+      </svg>
+      <div
+        className="absolute inset-0 flex flex-col items-center justify-center font-extrabold tabular-nums text-amber-500"
+        style={{ fontSize: size * 0.3 }}
+      >
+        <span>{String(remaining).padStart(2, "0")}</span>
+        <span
+          className="font-semibold uppercase text-amber-400"
+          style={{ fontSize: size * 0.11 }}
+        >
+          ⏸ paused
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -174,7 +243,7 @@ function Notice({
           whileHover={{ scale: 1.04 }}
           whileTap={{ scale: 0.96 }}
           onClick={onAction}
-          className="rounded-lg bg-indigo-600 px-5 py-3 text-white"
+          className="rounded-lg bg-blue-600 px-5 py-3 text-white hover:bg-blue-700"
         >
           {actionLabel}
         </motion.button>
@@ -207,6 +276,7 @@ export default function StudentLiveQuiz({
 
   const [pageError, setPageError] = useState("");
   const [roomEnded, setRoomEnded] = useState(false);
+  const [endReason, setEndReason] = useState<string>("closed");
   const [removed, setRemoved] = useState(false);
   const [replaced, setReplaced] = useState(false);
 
@@ -229,23 +299,46 @@ export default function StudentLiveQuiz({
   const [leaderboard, setLeaderboard] = useState<RankedEntry[]>([]);
   const [testFinished, setTestFinished] = useState(false);
 
+  // Pause + auto-next state
+  const [paused, setPaused] = useState(false);
+  const [pausedRemainingMs, setPausedRemainingMs] = useState<number | null>(
+    null,
+  );
+  const [nextAt, setNextAt] = useState<number | null>(null);
+  const [nextIsLast, setNextIsLast] = useState(false);
+
+  // Refs so long-lived socket handlers never read stale state.
+  const liveQuestionRef = useRef<LiveQuestion | null>(null);
+  const testFinishedRef = useRef(false);
+  const avatarRef = useRef(avatar);
+  useEffect(() => {
+    avatarRef.current = avatar;
+  }, [avatar]);
+
   const { reactions, message, removeReaction, dismissMessage } =
     useTeacherBroadcasts(socket);
 
-  const remainingSeconds = useServerCountdown(
+  const liveRemaining = useServerCountdown(
     liveQuestion?.endsAt ?? null,
     serverOffset,
-    !!liveQuestion && !questionEnded && !testFinished,
+    !!liveQuestion && !questionEnded && !testFinished && !paused,
+  );
+
+  // While paused the timer is frozen at the value the server told us.
+  const remainingSeconds = paused
+    ? Math.ceil((pausedRemainingMs ?? 0) / 1000)
+    : liveRemaining;
+
+  const nextRemaining = useServerCountdown(
+    nextAt,
+    serverOffset,
+    nextAt !== null && questionEnded && !testFinished,
   );
 
   // --------------------------------
   // WARN BEFORE RELOAD / CLOSE while a live quiz is active
   // --------------------------------
   useEffect(() => {
-    // Warn only while the student is inside a live, unfinished quiz.
-    // - confirmed: they chose an avatar and pressed "Join Room"
-    // - isJoined:  the server acknowledged the join (so score exists)
-    // - not finished / removed / replaced / roomEnded
     const isActiveQuiz =
       confirmed &&
       isJoined &&
@@ -257,8 +350,6 @@ export default function StudentLiveQuiz({
     if (!isActiveQuiz) return;
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      // Modern browsers ignore the message but still need preventDefault()
-      // + returnValue truthy to show their native confirm dialog.
       e.preventDefault();
       e.returnValue =
         "Your live quiz is in progress. Reloading may interrupt your session — your score is saved, but any answer in this question could be missed.";
@@ -277,7 +368,10 @@ export default function StudentLiveQuiz({
     if (saved) {
       if (saved.myId) setMyId(saved.myId);
       if (AVATARS.includes(saved.avatar)) setAvatar(saved.avatar);
-      if (saved.confirmed) setConfirmed(true);
+      if (saved.confirmed) {
+        setConfirmed(true);
+        setIsJoining(true); // avoid flashing the "waiting" screen before join
+      }
       return;
     }
     // First visit: pick a random avatar.
@@ -287,9 +381,9 @@ export default function StudentLiveQuiz({
 
   // Persist on change so a full page reload is seamless.
   useEffect(() => {
-    if (!confirmed) return;
+    if (!confirmed || roomEnded) return;
     saveSession(code, email, { myId, avatar, confirmed });
-  }, [code, email, myId, avatar, confirmed]);
+  }, [code, email, myId, avatar, confirmed, roomEnded]);
 
   // --------------------------------
   // JOIN ROOM
@@ -326,7 +420,7 @@ export default function StudentLiveQuiz({
         setMyId(data.id);
         saveSession(code, email, {
           myId: data.id,
-          avatar,
+          avatar: avatarRef.current,
           confirmed: true,
         });
       }
@@ -337,10 +431,14 @@ export default function StudentLiveQuiz({
     };
 
     const handleRoomError = (data: { code?: string; message?: string }) => {
-      const code = data?.code;
+      const errCode = data?.code;
 
       // Fatal errors: this room is gone / we're not allowed.
-      if (code === "ROOM_GONE" || code === "FINISHED" || code === "BANNED") {
+      if (
+        errCode === "ROOM_GONE" ||
+        errCode === "FINISHED" ||
+        errCode === "BANNED"
+      ) {
         joinedRef.current = false;
         setPageError(data?.message || "Unable to join room.");
         setIsJoining(false);
@@ -366,10 +464,18 @@ export default function StudentLiveQuiz({
       }
 
       // Only reset per-question state when it's actually a NEW question.
+      // (Read from a ref: this handler is bound once, state would be stale.)
+      const prev = liveQuestionRef.current;
       const isNewQuestion =
-        !liveQuestion || liveQuestion.questionIndex !== data.questionIndex;
+        !prev || prev.questionIndex !== data.questionIndex;
 
+      liveQuestionRef.current = data;
       setLiveQuestion(data);
+
+      // A paused question is re-announced with "test-paused" right after
+      // this event (reconnect), so un-pausing here is always safe.
+      setPaused(false);
+      setPausedRemainingMs(null);
 
       if (isNewQuestion) {
         setSelectedOption(null);
@@ -381,8 +487,39 @@ export default function StudentLiveQuiz({
         setResults([]);
         setDistribution([]);
         setAnsweredCount(0);
+        setNextAt(null);
       }
     };
+
+    const handleTestPaused = (data: {
+      remainingMs?: number;
+      serverNow?: number;
+    }) => {
+      if (typeof data?.serverNow === "number") {
+        setServerOffset(data.serverNow - Date.now());
+      }
+      setPaused(true);
+      setPausedRemainingMs(Math.max(0, data?.remainingMs ?? 0));
+    };
+
+    const handleTestResumed = () => {
+      setPaused(false);
+      setPausedRemainingMs(null);
+    };
+
+    const handleAutoNextScheduled = (data: {
+      nextAt: number;
+      serverNow?: number;
+      isLast?: boolean;
+    }) => {
+      if (typeof data?.serverNow === "number") {
+        setServerOffset(data.serverNow - Date.now());
+      }
+      setNextAt(data.nextAt);
+      setNextIsLast(!!data.isLast);
+    };
+
+    const handleAutoNextCancelled = () => setNextAt(null);
 
     const handleAnswerLocked = (data: { selectedOptionIndex?: number }) => {
       if (typeof data?.selectedOptionIndex === "number") {
@@ -419,6 +556,8 @@ export default function StudentLiveQuiz({
       distribution?: number[];
     }) => {
       setQuestionEnded(true);
+      setPaused(false);
+      setPausedRemainingMs(null);
       if (typeof data?.correctOptionIndex === "number") {
         setCorrectOptionIndex(data.correctOptionIndex);
       }
@@ -432,12 +571,20 @@ export default function StudentLiveQuiz({
     };
 
     const handleTestFinished = (data: { leaderboard: RankedEntry[] }) => {
+      testFinishedRef.current = true;
       if (data?.leaderboard) setLeaderboard(data.leaderboard);
       setTestFinished(true);
       setQuestionEnded(true);
+      setPaused(false);
+      setNextAt(null);
     };
 
-    const handleRoomEnded = (data: { message?: string }) => {
+    const handleRoomEnded = (data: { message?: string; reason?: string }) => {
+      // Already looking at the final results? Keep them on screen.
+      if (testFinishedRef.current) return;
+
+      clearSession(code, email);
+      setEndReason(data?.reason ?? "closed");
       setRoomEnded(true);
       setPageError(data?.message || "The teacher has closed this room.");
     };
@@ -459,6 +606,10 @@ export default function StudentLiveQuiz({
     socket.on("room-joined", handleRoomJoined);
     socket.on("room-error", handleRoomError);
     socket.on("question-started", handleQuestionStarted);
+    socket.on("test-paused", handleTestPaused);
+    socket.on("test-resumed", handleTestResumed);
+    socket.on("auto-next-scheduled", handleAutoNextScheduled);
+    socket.on("auto-next-cancelled", handleAutoNextCancelled);
     socket.on("answer-locked", handleAnswerLocked);
     socket.on("answer-result", handleAnswerResult);
     socket.on("answer-error", handleAnswerError);
@@ -475,6 +626,10 @@ export default function StudentLiveQuiz({
       socket.off("room-joined", handleRoomJoined);
       socket.off("room-error", handleRoomError);
       socket.off("question-started", handleQuestionStarted);
+      socket.off("test-paused", handleTestPaused);
+      socket.off("test-resumed", handleTestResumed);
+      socket.off("auto-next-scheduled", handleAutoNextScheduled);
+      socket.off("auto-next-cancelled", handleAutoNextCancelled);
       socket.off("answer-locked", handleAnswerLocked);
       socket.off("answer-result", handleAnswerResult);
       socket.off("answer-error", handleAnswerError);
@@ -487,11 +642,6 @@ export default function StudentLiveQuiz({
       socket.off("removed-from-room", handleRemoved);
       socket.off("session-replaced", handleReplaced);
     };
-    // liveQuestion is read inside the handler; we deliberately don't re-bind
-    // every time it changes (the handler closes over the *first* value).
-    // Re-binding is unnecessary because `questionIndex` is all we need and
-    // the reset logic is idempotent if it fires twice for the same question.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, code, email]);
 
   // --------------------------------
@@ -530,6 +680,11 @@ export default function StudentLiveQuiz({
       return;
     }
 
+    if (paused) {
+      setAnswerFeedback("The quiz is paused. Wait for the teacher to resume.");
+      return;
+    }
+
     if (hasSubmitted || questionEnded || remainingSeconds <= 0) return;
 
     setHasSubmitted(true);
@@ -557,12 +712,15 @@ export default function StudentLiveQuiz({
   // --------------------------------
 
   if (roomEnded) {
+    const endedByTeacher = endReason === "ended-by-teacher";
     return (
       <Notice
-        icon="✕"
-        iconClass="bg-red-100 text-red-600"
-        title="Room Closed"
-        titleClass="text-red-500"
+        icon={endedByTeacher ? "🏁" : "✕"}
+        iconClass={
+          endedByTeacher ? "bg-blue-100 text-blue-600" : "bg-red-100 text-red-600"
+        }
+        title={endedByTeacher ? "Quiz ended by the teacher" : "Room Closed"}
+        titleClass={endedByTeacher ? "text-blue-600" : "text-red-500"}
         message={pageError}
         actionLabel={exitLabel}
         onAction={onExit}
@@ -574,9 +732,9 @@ export default function StudentLiveQuiz({
     return (
       <Notice
         icon="🔀"
-        iconClass="bg-indigo-100"
+        iconClass="bg-blue-400/20"
         title="Opened somewhere else"
-        titleClass="text-indigo-600"
+        titleClass="text-blue-600"
         message={pageError}
         actionLabel={exitLabel}
         onAction={onExit}
@@ -629,11 +787,13 @@ export default function StudentLiveQuiz({
               initial={{ scale: 0.4, rotate: -20 }}
               animate={{ scale: 1, rotate: 0 }}
               transition={{ type: "spring", stiffness: 400, damping: 14 }}
-              className="mx-auto flex h-28 w-28 items-center justify-center rounded-full bg-indigo-100 text-6xl shadow-inner"
+              className="mx-auto flex h-28 w-28 items-center justify-center rounded-full bg-blue-400/20 text-6xl shadow-inner ring-4 ring-blue-400/30"
             >
               {avatar}
             </motion.div>
-            <h1 className="mt-4 text-2xl font-bold">Almost there!</h1>
+            <h1 className="mt-4 text-2xl font-bold text-blue-700">
+              Almost there!
+            </h1>
             <p className="text-gray-500">
               Room <span className="font-bold tracking-widest">{code}</span>
             </p>
@@ -644,7 +804,7 @@ export default function StudentLiveQuiz({
                   {" "}
                   <button
                     onClick={onChangeUser}
-                    className="text-indigo-600 underline"
+                    className="text-blue-600 underline"
                   >
                     Not you?
                   </button>
@@ -653,7 +813,7 @@ export default function StudentLiveQuiz({
             </p>
           </div>
 
-          <section className="w-full rounded-2xl border bg-white p-5 shadow-sm">
+          <section className="w-full rounded-2xl border border-blue-400/30 bg-white p-5 shadow-sm">
             <h2 className="mb-3 font-bold">Pick your avatar</h2>
             <AvatarPicker value={avatar} onChange={setAvatar} />
           </section>
@@ -662,7 +822,7 @@ export default function StudentLiveQuiz({
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.97 }}
             onClick={confirmJoin}
-            className="w-full rounded-lg bg-indigo-600 px-5 py-3 font-semibold text-white"
+            className="w-full rounded-lg bg-blue-600 px-5 py-3 font-semibold text-white shadow-md shadow-blue-500/30 hover:bg-blue-700"
           >
             Join Room
           </motion.button>
@@ -692,7 +852,7 @@ export default function StudentLiveQuiz({
               setPageError("");
               joinRoom();
             }}
-            className="rounded-lg bg-indigo-600 px-5 py-2 text-white"
+            className="rounded-lg bg-blue-600 px-5 py-2 text-white hover:bg-blue-700"
           >
             Try Again
           </motion.button>
@@ -701,7 +861,7 @@ export default function StudentLiveQuiz({
               whileHover={{ scale: 1.04 }}
               whileTap={{ scale: 0.96 }}
               onClick={onChangeCode}
-              className="rounded-lg border px-5 py-2 text-gray-700"
+              className="rounded-lg border border-blue-400 px-5 py-2 text-blue-700"
             >
               Change code
             </motion.button>
@@ -726,7 +886,7 @@ export default function StudentLiveQuiz({
             initial={{ opacity: 0, scale: 0.92 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ type: "spring", stiffness: 200, damping: 20 }}
-            className="rounded-2xl border bg-white p-8 text-center shadow-sm"
+            className="rounded-2xl border border-blue-400/30 bg-white p-8 text-center shadow-sm"
           >
             <motion.div
               initial={{ scale: 0, rotate: -40 }}
@@ -741,7 +901,7 @@ export default function StudentLiveQuiz({
             >
               🏆
             </motion.div>
-            <h1 className="text-3xl font-bold">Test Completed!</h1>
+            <h1 className="text-3xl font-bold text-blue-700">Test Completed!</h1>
             <p className="mt-2 text-gray-500">
               Here are the final contest results.
             </p>
@@ -756,7 +916,7 @@ export default function StudentLiveQuiz({
                   stiffness: 200,
                   damping: 18,
                 }}
-                className="mt-6 rounded-xl bg-indigo-50 p-5"
+                className="mt-6 rounded-xl bg-blue-500/10 p-5"
               >
                 <div className="mb-2 flex justify-center">
                   <AvatarBadge
@@ -766,7 +926,7 @@ export default function StudentLiveQuiz({
                   />
                 </div>
                 <p className="text-gray-500">Your final position</p>
-                <p className="text-5xl font-extrabold text-indigo-600">
+                <p className="text-5xl font-extrabold text-blue-600">
                   #<AnimatedNumber value={me.rank} />
                 </p>
                 <p className="mt-2 font-semibold">
@@ -776,8 +936,10 @@ export default function StudentLiveQuiz({
             )}
           </motion.section>
 
-          <section className="rounded-2xl border bg-white p-5 shadow-sm">
-            <h2 className="mb-2 text-xl font-bold">Final Leaderboard</h2>
+          <section className="rounded-2xl border border-blue-400/30 bg-white p-5 shadow-sm">
+            <h2 className="mb-2 text-xl font-bold text-blue-700">
+              Final Leaderboard
+            </h2>
             <AvatarPodium entries={leaderboard} />
             <div className="mt-6">
               <AvatarLeaderboard
@@ -792,7 +954,7 @@ export default function StudentLiveQuiz({
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={onExit}
-            className="rounded-lg bg-indigo-600 px-5 py-3 text-white"
+            className="rounded-lg bg-blue-600 px-5 py-3 text-white hover:bg-blue-700"
           >
             {exitLabel}
           </motion.button>
@@ -814,7 +976,7 @@ export default function StudentLiveQuiz({
             {[0, 1].map((i) => (
               <motion.span
                 key={i}
-                className="absolute h-full w-full rounded-full bg-green-400"
+                className="absolute h-full w-full rounded-full bg-blue-400"
                 initial={{ scale: 0.6, opacity: 0.4 }}
                 animate={{ scale: 1.7, opacity: 0 }}
                 transition={{
@@ -829,7 +991,7 @@ export default function StudentLiveQuiz({
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
               transition={{ type: "spring", stiffness: 300, damping: 14 }}
-              className="relative flex h-24 w-24 items-center justify-center rounded-full bg-green-100 text-5xl"
+              className="relative flex h-24 w-24 items-center justify-center rounded-full bg-blue-400/20 text-5xl ring-4 ring-blue-400/40"
             >
               {avatar}
             </motion.div>
@@ -839,7 +1001,7 @@ export default function StudentLiveQuiz({
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3 }}
-            className="text-2xl font-bold text-green-600"
+            className="text-2xl font-bold text-blue-600"
           >
             You&apos;re in, {username}!
           </motion.h1>
@@ -853,7 +1015,7 @@ export default function StudentLiveQuiz({
             {[0, 1, 2].map((i) => (
               <motion.span
                 key={i}
-                className="h-1.5 w-1.5 rounded-full bg-gray-400"
+                className="h-1.5 w-1.5 rounded-full bg-blue-400"
                 animate={{ y: [0, -5, 0], opacity: [0.4, 1, 0.4] }}
                 transition={{
                   duration: 0.9,
@@ -877,14 +1039,31 @@ export default function StudentLiveQuiz({
   // LIVE QUESTION
   // --------------------------------
 
-  const locked = hasSubmitted || questionEnded || remainingSeconds <= 0;
+  const locked =
+    hasSubmitted || questionEnded || remainingSeconds <= 0 || paused;
+
+  const basePoints =
+    liveQuestion.question.basePoints ?? liveQuestion.question.marks * 100;
+  const maxBonus = liveQuestion.question.maxBonusPoints ?? 0;
+  const bonusNow =
+    liveQuestion.durationSeconds > 0
+      ? Math.round((maxBonus * remainingSeconds) / liveQuestion.durationSeconds)
+      : 0;
 
   let banner: {
     tone: keyof typeof toneClass;
     title: string;
     detail?: string;
   } | null = null;
-  if (questionEnded && result) {
+  if (paused && !questionEnded) {
+    banner = {
+      tone: "warn",
+      title: "Quiz paused by the teacher ⏸",
+      detail: hasSubmitted
+        ? "Your answer is locked in. The timer is frozen until the teacher resumes."
+        : "Your timer is frozen. You can keep going as soon as the teacher resumes.",
+    };
+  } else if (questionEnded && result) {
     if (!result.answered) {
       banner = {
         tone: "warn",
@@ -892,13 +1071,16 @@ export default function StudentLiveQuiz({
         detail: "You didn't submit an answer for this question.",
       };
     } else if (result.isCorrect) {
+      const bonus = result.bonusPoints ?? 0;
+      const base = result.basePoints ?? result.earnedMarks - bonus;
+      const time =
+        result.responseTimeMs !== null
+          ? ` · answered in ${(result.responseTimeMs / 1000).toFixed(2)}s`
+          : "";
       banner = {
         tone: "success",
-        title: `Correct! +${result.earnedMarks} marks`,
-        detail:
-          result.responseTimeMs !== null
-            ? `Answered in ${(result.responseTimeMs / 1000).toFixed(2)} seconds.`
-            : undefined,
+        title: `Correct! +${result.earnedMarks} points`,
+        detail: `${base} base + ⚡ ${bonus} speed bonus${time}`,
       };
     } else {
       banner = {
@@ -920,20 +1102,22 @@ export default function StudentLiveQuiz({
   return (
     <MotionConfig reducedMotion="user">
       {broadcastLayer}
-      <div className="min-h-screen bg-gradient-to-b from-indigo-50 via-white to-white">
+      <div className="min-h-screen bg-gradient-to-b from-blue-500/10 via-white to-white">
         <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 p-5">
           <header className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <AvatarBadge avatar={avatar} name={username} size={44} />
               <div>
-                <h1 className="text-xl font-bold">{headerTitle}</h1>
+                <h1 className="text-xl font-bold text-blue-700">
+                  {headerTitle}
+                </h1>
                 <p className="text-sm text-gray-500">Room {code}</p>
               </div>
             </div>
 
             <div className="flex items-center gap-4">
               {me && (
-                <div className="overflow-hidden rounded-xl bg-indigo-50 px-3 py-1.5 text-center">
+                <div className="overflow-hidden rounded-xl bg-blue-500/10 px-3 py-1.5 text-center">
                   <p className="text-xs text-gray-500">Your rank</p>
                   <AnimatePresence mode="popLayout" initial={false}>
                     <motion.p
@@ -941,7 +1125,7 @@ export default function StudentLiveQuiz({
                       initial={{ y: -16, opacity: 0 }}
                       animate={{ y: 0, opacity: 1 }}
                       exit={{ y: 16, opacity: 0 }}
-                      className="text-lg font-extrabold text-indigo-600"
+                      className="text-lg font-extrabold text-blue-600"
                     >
                       #{me.rank}
                     </motion.p>
@@ -949,14 +1133,22 @@ export default function StudentLiveQuiz({
                 </div>
               )}
 
-              <QuizTimer
-                remaining={remainingSeconds}
-                total={liveQuestion.durationSeconds}
-                endsAt={liveQuestion.endsAt}
-                offsetMs={serverOffset}
-                ended={questionEnded}
-                size={84}
-              />
+              {paused && !questionEnded ? (
+                <PausedClock
+                  remaining={remainingSeconds}
+                  total={liveQuestion.durationSeconds}
+                  size={84}
+                />
+              ) : (
+                <QuizTimer
+                  remaining={remainingSeconds}
+                  total={liveQuestion.durationSeconds}
+                  endsAt={liveQuestion.endsAt}
+                  offsetMs={serverOffset}
+                  ended={questionEnded}
+                  size={84}
+                />
+              )}
             </div>
           </header>
 
@@ -967,19 +1159,22 @@ export default function StudentLiveQuiz({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -60 }}
               transition={{ type: "spring", stiffness: 260, damping: 28 }}
-              className="rounded-2xl border bg-white p-6 shadow-sm"
+              className="rounded-2xl border border-blue-400/30 bg-white p-6 shadow-sm"
             >
               <div className="mb-3 flex items-center justify-between text-sm text-gray-500">
                 <span>
                   Question {liveQuestion.questionIndex + 1} of{" "}
                   {liveQuestion.totalQuestions}
                 </span>
-                <span>{liveQuestion.question.marks} marks</span>
+                <span className="font-semibold text-blue-600">
+                  {basePoints} pts
+                  {maxBonus > 0 && ` + up to ⚡${maxBonus}`}
+                </span>
               </div>
 
-              <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-gray-100">
+              <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-blue-400/20">
                 <motion.div
-                  className="h-full rounded-full bg-indigo-500"
+                  className="h-full rounded-full bg-blue-500"
                   initial={false}
                   animate={{
                     width: `${((liveQuestion.questionIndex + 1) / liveQuestion.totalQuestions) * 100}%`,
@@ -988,12 +1183,22 @@ export default function StudentLiveQuiz({
                 />
               </div>
 
-              {leaderboard.length > 0 && !questionEnded && (
-                <p className="mb-4 text-xs text-gray-500">
-                  👥 <AnimatedNumber value={answeredCount} /> of{" "}
-                  {leaderboard.length} answered
-                </p>
-              )}
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+                {leaderboard.length > 0 && !questionEnded ? (
+                  <span>
+                    👥 <AnimatedNumber value={answeredCount} /> of{" "}
+                    {leaderboard.length} answered
+                  </span>
+                ) : (
+                  <span />
+                )}
+
+                {!locked && maxBonus > 0 && (
+                  <span className="rounded-full bg-blue-500/10 px-3 py-1 font-semibold text-blue-700">
+                    ⚡ Speed bonus now: +{bonusNow}
+                  </span>
+                )}
+              </div>
 
               <h2 className="mb-6 text-2xl font-bold">
                 {liveQuestion.question.question}
@@ -1015,7 +1220,7 @@ export default function StudentLiveQuiz({
                     correctOptionIndex !== null &&
                     correctOptionIndex !== index;
 
-                  let style = "border-gray-200";
+                  let style = "border-gray-200 hover:border-blue-400";
                   if (showCorrect)
                     style =
                       "border-green-500 bg-green-50 text-green-700 ring-2 ring-green-300";
@@ -1023,7 +1228,8 @@ export default function StudentLiveQuiz({
                     style =
                       "border-red-500 bg-red-50 text-red-700 ring-2 ring-red-300";
                   else if (isSelected)
-                    style = "border-indigo-600 bg-indigo-50 text-indigo-700";
+                    style =
+                      "border-blue-600 bg-blue-500/10 text-blue-700 ring-2 ring-blue-400/40";
 
                   return (
                     <motion.div key={index} variants={optionItem}>
@@ -1072,21 +1278,27 @@ export default function StudentLiveQuiz({
                     key="submit"
                     initial={{ opacity: 0, y: 10 }}
                     animate={{
-                      opacity: selectedOption === null ? 0.5 : 1,
+                      opacity: selectedOption === null || paused ? 0.5 : 1,
                       y: 0,
                     }}
                     exit={{ opacity: 0, y: -10 }}
                     whileHover={
-                      selectedOption === null ? undefined : { scale: 1.02 }
+                      selectedOption === null || paused
+                        ? undefined
+                        : { scale: 1.02 }
                     }
                     whileTap={
-                      selectedOption === null ? undefined : { scale: 0.97 }
+                      selectedOption === null || paused
+                        ? undefined
+                        : { scale: 0.97 }
                     }
                     onClick={submitAnswer}
-                    disabled={selectedOption === null || remainingSeconds <= 0}
-                    className="mt-6 w-full rounded-lg bg-indigo-600 px-5 py-3 font-semibold text-white"
+                    disabled={
+                      selectedOption === null || remainingSeconds <= 0 || paused
+                    }
+                    className="mt-6 w-full rounded-lg bg-blue-600 px-5 py-3 font-semibold text-white shadow-md shadow-blue-500/30 hover:bg-blue-700"
                   >
-                    Submit Answer
+                    {paused ? "Paused ⏸" : "Submit Answer"}
                   </motion.button>
                 )}
               </AnimatePresence>
@@ -1126,7 +1338,11 @@ export default function StudentLiveQuiz({
                     animate={{ opacity: 1 }}
                     className="mt-5 text-center font-semibold text-gray-500"
                   >
-                    Question ended. Waiting for the next question...
+                    {nextAt !== null
+                      ? nextIsLast
+                        ? `Final results in ${Math.max(0, nextRemaining)}s...`
+                        : `Next question in ${Math.max(0, nextRemaining)}s...`
+                      : "Question ended. Waiting for the next question..."}
                   </motion.p>
                 )}
               </AnimatePresence>
@@ -1144,8 +1360,8 @@ export default function StudentLiveQuiz({
             />
           )}
 
-          <section className="rounded-2xl border bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-xl font-bold">Leaderboard</h2>
+          <section className="rounded-2xl border border-blue-400/30 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 text-xl font-bold text-blue-700">Leaderboard</h2>
 
             {leaderboard.length === 0 ? (
               <p className="text-gray-500">
