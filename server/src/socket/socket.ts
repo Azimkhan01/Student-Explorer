@@ -30,6 +30,7 @@ const TEACHER_GRACE_MS = 60 * 1000; // teacher may reconnect within this time
 const AUTO_NEXT_MIN_SECONDS = 2;
 const AUTO_NEXT_MAX_SECONDS = 60;
 const AUTO_NEXT_DEFAULT_SECONDS = 5;
+
 // ---------------- END EARLY WHEN EVERYONE ANSWERED ----------------
 const ALL_ANSWERED_DELAY_MS = 1000;
 
@@ -82,6 +83,8 @@ interface TestState {
   autoNext: boolean;
   autoNextDelaySeconds: number;
   autoNextAt: number | null; // when the next question will start automatically
+  // end the question early once every online student has answered
+  endOnAllAnswered: boolean;
 }
 
 interface QuizData {
@@ -135,6 +138,7 @@ export class CreateSocket
   private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private teacherTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private autoNextTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private allAnsweredTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastBroadcastAt = new Map<string, number>();
 
   constructor(private readonly redisService: RedisService) {}
@@ -212,6 +216,7 @@ export class CreateSocket
       this.cleanupTimers,
       this.teacherTimers,
       this.autoNextTimers,
+      this.allAnsweredTimers,
     ]) {
       const t = map.get(roomId);
       if (t) clearTimeout(t);
@@ -362,6 +367,61 @@ export class CreateSocket
     this.autoNextTimers.delete(roomId);
   }
 
+  private clearAllAnswered(roomId: string) {
+    const t = this.allAnsweredTimers.get(roomId);
+    if (t) clearTimeout(t);
+    this.allAnsweredTimers.delete(roomId);
+  }
+
+  // If every ONLINE student has answered, end the question after a short
+  // pause (unless the timer would end it sooner anyway).
+  private async checkAllAnswered(roomId: string) {
+    try {
+      if (this.allAnsweredTimers.has(roomId)) return;
+
+      const state = await this.redisService.getObject<TestState>(
+        this.testStateKey(roomId),
+      );
+
+      if (
+        !state ||
+        state.status !== "running" ||
+        state.paused ||
+        state.endOnAllAnswered === false
+      ) {
+        return;
+      }
+
+      const students = await this.getRoomStudents(roomId);
+      const online = students.filter((s) => s.connected);
+      if (online.length === 0) return;
+
+      const answers = await this.redisService.hGetAll(
+        this.answersKey(roomId, state.currentQuestionIndex),
+      );
+      if (!online.every((s) => answers[s.id])) return;
+
+      // Not worth cutting it short if the timer is about to end anyway.
+      const remainingMs = (state.questionEndsAt ?? 0) - Date.now();
+      if (remainingMs <= ALL_ANSWERED_DELAY_MS) return;
+
+      // Another call may have scheduled it while we were awaiting.
+      if (this.allAnsweredTimers.has(roomId)) return;
+
+      const questionIndex = state.currentQuestionIndex;
+
+      const timer = setTimeout(() => {
+        this.allAnsweredTimers.delete(roomId);
+        // fromTimer: ignored if the teacher paused in the meantime.
+        void this.finishQuestion(roomId, questionIndex, { fromTimer: true });
+      }, ALL_ANSWERED_DELAY_MS);
+
+      this.allAnsweredTimers.set(roomId, timer);
+    } catch (error) {
+      console.error("Check all answered error:", error);
+    }
+  }
+
   // -----------------------------------------
   // GATEWAY HOOKS
   // -----------------------------------------
@@ -479,6 +539,7 @@ export class CreateSocket
         autoNext: false,
         autoNextDelaySeconds: AUTO_NEXT_DEFAULT_SECONDS,
         autoNextAt: null,
+        endOnAllAnswered: true,
       };
 
       const claimed = await this.redisService.setNx(
@@ -611,6 +672,7 @@ export class CreateSocket
         pausedRemainingMs: state.pausedRemainingMs,
         autoNext: state.autoNext,
         autoNextDelaySeconds: state.autoNextDelaySeconds,
+        endOnAllAnswered: state.endOnAllAnswered !== false,
         students,
         leaderboard,
         answeredIds,
@@ -949,6 +1011,7 @@ export class CreateSocket
       durationSeconds?: number;
       autoNext?: boolean;
       autoNextDelaySeconds?: number;
+      endOnAllAnswered?: boolean;
     },
     @ConnectedSocket() client: Socket,
   ) {
@@ -984,10 +1047,20 @@ export class CreateSocket
         payload?.autoNextDelaySeconds !== undefined
           ? this.clampAutoDelay(payload.autoNextDelaySeconds)
           : state.autoNextDelaySeconds;
+      const endOnAllAnswered =
+        typeof payload?.endOnAllAnswered === "boolean"
+          ? payload.endOnAllAnswered
+          : state.endOnAllAnswered !== false;
 
       await this.redisService.setObject(
         this.testStateKey(roomId),
-        { ...state, durationSeconds, autoNext, autoNextDelaySeconds },
+        {
+          ...state,
+          durationSeconds,
+          autoNext,
+          autoNextDelaySeconds,
+          endOnAllAnswered,
+        },
         ROOM_TTL_SECONDS,
       );
 
@@ -1031,6 +1104,7 @@ export class CreateSocket
       const timer = this.questionTimers.get(roomId);
       if (timer) clearTimeout(timer);
       this.questionTimers.delete(roomId);
+      this.clearAllAnswered(roomId);
 
       await this.redisService.setObject(
         this.testStateKey(roomId),
@@ -1098,6 +1172,9 @@ export class CreateSocket
       });
 
       this.armQuestionTimer(roomId, state.currentQuestionIndex, remainingMs);
+
+      // Everyone may already have answered before the pause.
+      void this.checkAllAnswered(roomId);
     } catch (error) {
       console.error("Resume test error:", error);
       client.emit("test-error", { message: "Unable to resume the test." });
@@ -1105,13 +1182,17 @@ export class CreateSocket
   }
 
   // -----------------------------------------
-  // TEACHER: CHANGE FLOW SETTINGS (auto next question) AT ANY TIME
+  // TEACHER: CHANGE FLOW SETTINGS AT ANY TIME
   // -----------------------------------------
 
   @SubscribeMessage("update-settings")
   async updateSettings(
     @MessageBody()
-    payload: { autoNext?: boolean; autoNextDelaySeconds?: number },
+    payload: {
+      autoNext?: boolean;
+      autoNextDelaySeconds?: number;
+      endOnAllAnswered?: boolean;
+    },
     @ConnectedSocket() client: Socket,
   ) {
     try {
@@ -1132,12 +1213,17 @@ export class CreateSocket
         payload?.autoNextDelaySeconds !== undefined
           ? this.clampAutoDelay(payload.autoNextDelaySeconds)
           : state.autoNextDelaySeconds;
+      const endOnAllAnswered =
+        typeof payload?.endOnAllAnswered === "boolean"
+          ? payload.endOnAllAnswered
+          : state.endOnAllAnswered !== false;
 
       const nextState: TestState = {
         ...state,
         autoNext,
         autoNextDelaySeconds: delay,
         autoNextAt: autoNext ? state.autoNextAt : null,
+        endOnAllAnswered,
       };
 
       await this.redisService.setObject(
@@ -1166,9 +1252,19 @@ export class CreateSocket
         }
       }
 
+      if (state.status === "running") {
+        if (!endOnAllAnswered) {
+          this.clearAllAnswered(roomId);
+        } else if (state.endOnAllAnswered === false) {
+          // Just switched on: maybe everyone has already answered.
+          void this.checkAllAnswered(roomId);
+        }
+      }
+
       client.emit("settings-updated", {
         autoNext,
         autoNextDelaySeconds: delay,
+        endOnAllAnswered,
       });
     } catch (error) {
       console.error("Update settings error:", error);
@@ -1361,6 +1457,8 @@ export class CreateSocket
       this.server.to(meta.teacherSocketId).emit("room-users", students);
       this.server.to(roomId).emit("leaderboard-updated", leaderboard);
 
+      void this.checkAllAnswered(roomId);
+
       console.log("Student removed by teacher:", student.username);
     } catch (error) {
       console.error("Remove student (teacher) error:", error);
@@ -1375,6 +1473,7 @@ export class CreateSocket
   private async startQuestion(roomId: string, questionIndex: number) {
     // A manual "next" or an auto-advance always replaces any pending countdown.
     this.cancelAutoNext(roomId);
+    this.clearAllAnswered(roomId);
 
     const quiz = await this.redisService.getObject<QuizData>(
       this.quizKey(roomId),
@@ -1624,6 +1723,9 @@ export class CreateSocket
         id: studentId,
         answeredCount: await this.redisService.hLen(answerKey),
       });
+
+      // Everyone answered? Finish the question without waiting for the timer.
+      void this.checkAllAnswered(roomId);
     } catch (error) {
       console.error("Submit answer error:", error);
       client.emit("answer-error", { message: "Unable to submit your answer." });
@@ -1669,6 +1771,7 @@ export class CreateSocket
     const timer = this.questionTimers.get(roomId);
     if (timer) clearTimeout(timer);
     this.questionTimers.delete(roomId);
+    this.clearAllAnswered(roomId);
 
     const question = quiz.questions[questionIndex];
     const correctOptionIndex = Number(question.correct_answer);
@@ -1910,6 +2013,7 @@ export class CreateSocket
     if (timer) clearTimeout(timer);
     this.questionTimers.delete(roomId);
     this.cancelAutoNext(roomId);
+    this.clearAllAnswered(roomId);
 
     const state = await this.redisService.getObject<TestState>(
       this.testStateKey(roomId),
@@ -2010,6 +2114,9 @@ export class CreateSocket
       });
       this.server.to(meta.teacherSocketId).emit("room-users", students);
       this.server.to(roomId).emit("leaderboard-updated", leaderboard);
+
+      // The last unanswered student may have just left.
+      void this.checkAllAnswered(roomId);
     } catch (error) {
       console.error("Student disconnect error:", error);
     }

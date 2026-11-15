@@ -381,17 +381,21 @@ function TeacherStage({
 function FlowControls({
   autoNext,
   delay,
+  endOnAllAnswered,
   live,
   disabled,
   onToggle,
   onDelay,
+  onEndOnAllAnswered,
 }: {
   autoNext: boolean;
   delay: number;
+  endOnAllAnswered: boolean;
   live: boolean;
   disabled: boolean;
   onToggle: (value: boolean) => void;
   onDelay: (seconds: number) => void;
+  onEndOnAllAnswered: (value: boolean) => void;
 }) {
   return (
     <Glass className="p-6">
@@ -433,6 +437,38 @@ function FlowControls({
           <motion.span
             className="absolute top-1 h-6 w-6 rounded-full bg-white shadow"
             animate={{ left: autoNext ? 28 : 4 }}
+            transition={{ type: "spring", stiffness: 500, damping: 32 }}
+          />
+        </button>
+      </div>
+
+      <div className="mt-4 flex items-center justify-between gap-4 rounded-2xl bg-white/5 p-4 ring-1 ring-white/10">
+        <div>
+          <p className="font-semibold text-white">
+            ✅ End early when everyone answers
+          </p>
+          <p className="text-sm text-slate-400">
+            End 1 second after every online student answers. Offline students
+            won&apos;t block it.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          role="switch"
+          aria-checked={endOnAllAnswered}
+          aria-label="End early when everyone answers"
+          disabled={disabled}
+          onClick={() => onEndOnAllAnswered(!endOnAllAnswered)}
+          className={`relative h-8 w-14 shrink-0 rounded-full ring-1 transition disabled:opacity-50 ${
+            endOnAllAnswered
+              ? "bg-gradient-to-r from-blue-500 to-blue-700 ring-blue-400/50"
+              : "bg-white/10 ring-white/20"
+          }`}
+        >
+          <motion.span
+            className="absolute top-1 h-6 w-6 rounded-full bg-white shadow"
+            animate={{ left: endOnAllAnswered ? 28 : 4 }}
             transition={{ type: "spring", stiffness: 500, damping: 32 }}
           />
         </button>
@@ -517,6 +553,7 @@ export default function TeacherLiveQuizPage() {
   );
   const [autoNext, setAutoNext] = useState(false);
   const [autoNextDelay, setAutoNextDelay] = useState(5);
+  const [endOnAllAnswered, setEndOnAllAnswered] = useState(true);
   const [nextAt, setNextAt] = useState<number | null>(null);
   const [nextIsLast, setNextIsLast] = useState(false);
 
@@ -671,6 +708,7 @@ export default function TeacherLiveQuizPage() {
       pausedRemainingMs?: number | null;
       autoNext?: boolean;
       autoNextDelaySeconds?: number;
+      endOnAllAnswered?: boolean;
       students: Student[];
       leaderboard: RankedEntry[];
       answeredIds: string[];
@@ -692,6 +730,7 @@ export default function TeacherLiveQuizPage() {
       if (typeof data.autoNextDelaySeconds === "number") {
         setAutoNextDelay(data.autoNextDelaySeconds);
       }
+      setEndOnAllAnswered(data.endOnAllAnswered !== false);
 
       // Trust the server status over the order the replayed events arrived in.
       setIsQuestionEnded(
@@ -769,10 +808,14 @@ export default function TeacherLiveQuizPage() {
     const handleSettingsUpdated = (data: {
       autoNext?: boolean;
       autoNextDelaySeconds?: number;
+      endOnAllAnswered?: boolean;
     }) => {
       if (typeof data?.autoNext === "boolean") setAutoNext(data.autoNext);
       if (typeof data?.autoNextDelaySeconds === "number") {
         setAutoNextDelay(data.autoNextDelaySeconds);
+      }
+      if (typeof data?.endOnAllAnswered === "boolean") {
+        setEndOnAllAnswered(data.endOnAllAnswered);
       }
     };
 
@@ -937,6 +980,7 @@ export default function TeacherLiveQuizPage() {
       durationSeconds,
       autoNext,
       autoNextDelaySeconds: autoNextDelay,
+      endOnAllAnswered,
     });
   };
 
@@ -969,6 +1013,7 @@ export default function TeacherLiveQuizPage() {
       socket.emit("update-settings", {
         autoNext: value,
         autoNextDelaySeconds: autoNextDelay,
+        endOnAllAnswered,
       });
     }
   };
@@ -979,6 +1024,18 @@ export default function TeacherLiveQuizPage() {
       socket.emit("update-settings", {
         autoNext,
         autoNextDelaySeconds: seconds,
+        endOnAllAnswered,
+      });
+    }
+  };
+
+  const toggleEndOnAllAnswered = (value: boolean) => {
+    setEndOnAllAnswered(value);
+    if (socket && roomId && isTestStarted) {
+      socket.emit("update-settings", {
+        autoNext,
+        autoNextDelaySeconds: autoNextDelay,
+        endOnAllAnswered: value,
       });
     }
   };
@@ -1537,10 +1594,12 @@ export default function TeacherLiveQuizPage() {
               <FlowControls
                 autoNext={autoNext}
                 delay={autoNextDelay}
+                endOnAllAnswered={endOnAllAnswered}
                 live={isTestStarted}
                 disabled={!isConnected}
                 onToggle={toggleAutoNext}
                 onDelay={changeAutoDelay}
+                onEndOnAllAnswered={toggleEndOnAllAnswered}
               />
             )}
 
