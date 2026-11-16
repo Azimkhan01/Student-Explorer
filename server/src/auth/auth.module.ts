@@ -16,7 +16,7 @@ import { Teacher } from '../entity/teacher.entity.js';
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET'),
         signOptions: {
-          expiresIn: '15m',
+          expiresIn: '1d',
         },
       }),
     }),

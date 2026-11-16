@@ -42,7 +42,7 @@ export class AuthController {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax',
-            maxAge: 15 * 60 * 1000,
+            maxAge: 24 * 60 * 60 * 1000,
             path: '/',
         });
 
@@ -95,9 +95,9 @@ export class AuthController {
     }
 
     @Post('reset-password')
-async resetPassword(@Body() data: ResetPasswordDTO) {
-    return this.authService.resetPassword(data);
-}
+    async resetPassword(@Body() data: ResetPasswordDTO) {
+        return this.authService.resetPassword(data);
+    }
 
 
 }
